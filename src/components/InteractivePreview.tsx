@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2 } from "lucide-react";
+import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Slider } from "./ui/slider";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { toast } from "sonner";
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
@@ -51,6 +52,15 @@ const STICKY_COLORS = [
   { name: "Sky", hex: "#E3F2FD" },
   { name: "Lavender", hex: "#F3E5F5" },
   { name: "Peach", hex: "#FFE8D6" },
+];
+
+const BOARD_THEMES = [
+  { name: "Warm Pastels", colors: ["#FFF9DB", "#D4EDDA", "#FDE8E8", "#FFE8D6", "#F3E5F5", "#E3F2FD"] },
+  { name: "Earth Tones", colors: ["#F5E6D3", "#E8D5B7", "#D4C5A9", "#C9B99A", "#BFA98B", "#E6D5C3"] },
+  { name: "Ocean Breeze", colors: ["#E0F4FF", "#B8E6FF", "#D4F1F9", "#E8F8F5", "#D1ECFE", "#C5E8F7"] },
+  { name: "Midnight", colors: ["#E8E3F3", "#DCD6ED", "#D0CAE7", "#C4BEE1", "#E5E0F0", "#DBD5EA"] },
+  { name: "Sunset", colors: ["#FFECD2", "#FCB69F", "#FFD6B0", "#FFEAA7", "#FDE8E8", "#F8C9B8"] },
+  { name: "Monochrome", colors: ["#F5F5F5", "#EBEBEB", "#E0E0E0", "#D6D6D6", "#CCCCCC", "#F0F0F0"] },
 ];
 
 type Phase = "input" | "questions" | "generating" | "board";
@@ -124,6 +134,9 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   // Zoom and canvas
   const [zoom, setZoom] = useState(100);
   const [canvasSize, setCanvasSize] = useState({ w: 1400, h: 800 });
+
+  // Board color theme
+  const [activeTheme, setActiveTheme] = useState<string>("Warm Pastels");
 
   // Follow-up questions flow
   const [phase, setPhase] = useState<Phase>("input");
@@ -200,6 +213,24 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     if (phase !== "board") setPhase("board");
     toast.success(`Imported ${importedIdeas.length} ideas`);
   };
+
+  // Apply a color theme to all items
+  const applyTheme = useCallback((colors: string[], themeName: string) => {
+    setActiveTheme(themeName);
+    if (items.length === 0) return;
+    setItems(prev => prev.map((item, i) => ({
+      ...item,
+      color: colors[i % colors.length],
+    })));
+    toast.success(`Applied "${themeName}" theme`);
+  }, [items]);
+
+  // Import palette from scan as board theme
+  const applyScannedPalette = useCallback(() => {
+    if (!importedPalette) return;
+    const colors = Object.values(importedPalette);
+    applyTheme(colors, "Scanned Palette");
+  }, [importedPalette, applyTheme]);
 
   // Import palette colors as note labels
   const importPalette = () => {
@@ -614,17 +645,70 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   <Link2 className="w-3 h-3" />
                   Connect
                 </button>
-                <div className="flex gap-1 ml-2">
-                  {STICKY_COLORS.map(c => (
-                    <button
-                      key={c.hex}
-                      onClick={() => { if (editingIdx !== null) updateItem(editingIdx, { color: c.hex }); }}
-                      className="w-4 h-4 rounded-full border border-border/50 hover:scale-125 transition-transform"
-                      style={{ backgroundColor: c.hex }}
-                      title={c.name}
-                    />
-                  ))}
-                </div>
+
+                {/* Board Color Theme Picker */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs hover:bg-secondary/80 transition-colors">
+                      <Palette className="w-3 h-3" />
+                      Colors
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-64 p-3" align="start">
+                    <p className="text-xs font-medium text-foreground mb-2">Board Theme</p>
+                    <div className="space-y-1.5 max-h-52 overflow-y-auto scrollbar-thin">
+                      {BOARD_THEMES.map(theme => (
+                        <button
+                          key={theme.name}
+                          onClick={() => applyTheme(theme.colors, theme.name)}
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition-colors ${
+                            activeTheme === theme.name ? "bg-accent/10 text-accent" : "hover:bg-secondary"
+                          }`}
+                        >
+                          <div className="flex gap-0.5 shrink-0">
+                            {theme.colors.slice(0, 4).map((c, i) => (
+                              <div key={i} className="w-3.5 h-3.5 rounded-sm border border-border/40" style={{ backgroundColor: c }} />
+                            ))}
+                          </div>
+                          <span>{theme.name}</span>
+                        </button>
+                      ))}
+                      {importedPalette && (
+                        <>
+                          <div className="h-px bg-border/50 my-1.5" />
+                          <button
+                            onClick={applyScannedPalette}
+                            className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition-colors ${
+                              activeTheme === "Scanned Palette" ? "bg-accent/10 text-accent" : "hover:bg-secondary"
+                            }`}
+                          >
+                            <div className="flex gap-0.5 shrink-0">
+                              {Object.values(importedPalette).slice(0, 4).map((c, i) => (
+                                <div key={i} className="w-3.5 h-3.5 rounded-sm border border-border/40" style={{ backgroundColor: c }} />
+                              ))}
+                            </div>
+                            <span className="text-accent">✦ From Moodboard</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-border/30">
+                      <p className="text-[10px] text-muted-foreground mb-1.5">Per-note color</p>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {STICKY_COLORS.map(c => (
+                          <button
+                            key={c.hex}
+                            onClick={() => { if (editingIdx !== null) updateItem(editingIdx, { color: c.hex }); }}
+                            className="w-5 h-5 rounded-full border border-border/50 hover:scale-125 transition-transform"
+                            style={{ backgroundColor: c.hex }}
+                            title={`${c.name} (select a note first)`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </PopoverContent>
+                </Popover>
               </>
             )}
           </div>
@@ -651,7 +735,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
         </div>
 
         {/* Main canvas */}
-        <div className="flex-1 overflow-auto p-4" style={{ minHeight: 0 }}>
+        <div className="flex-1 overflow-hidden p-4" style={{ minHeight: 0 }}>
           <AnimatePresence mode="wait">
             {/* Phase: Input */}
             {phase === "input" && (
@@ -767,7 +851,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
 
             {/* Phase: Board */}
             {phase === "board" && items.length > 0 && (
-              <motion.div key="board" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="space-y-3">
+              <motion.div key="board" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="h-full flex flex-col gap-3">
                 <InteractiveBoard
                   items={items}
                   layoutType={layoutType}
@@ -778,6 +862,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   dragIdx={dragIdx}
                   onDragIdx={setDragIdx}
                   zoom={zoom}
+                  onZoomChange={setZoom}
                   canvasWidth={canvasSize.w}
                   canvasHeight={canvasSize.h}
                   connectMode={connectMode}
@@ -923,7 +1008,7 @@ async function readStream(resp: Response): Promise<string> {
   return full;
 }
 
-/* ── Interactive Board with Connectors ── */
+/* ── Interactive Board with Pan & Zoom ── */
 
 interface BoardProps {
   items: LayoutItem[];
@@ -935,6 +1020,7 @@ interface BoardProps {
   dragIdx: number | null;
   onDragIdx: (idx: number | null) => void;
   zoom: number;
+  onZoomChange: (z: number) => void;
   canvasWidth: number;
   canvasHeight: number;
   connectMode: boolean;
@@ -942,15 +1028,88 @@ interface BoardProps {
   onConnectClick: (idx: number) => void;
 }
 
-function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateItem, onDeleteItem, dragIdx, onDragIdx, zoom, canvasWidth, canvasHeight, connectMode, connectFrom, onConnectClick }: BoardProps) {
+function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateItem, onDeleteItem, dragIdx, onDragIdx, zoom, onZoomChange, canvasWidth, canvasHeight, connectMode, connectFrom, onConnectClick }: BoardProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
   const boardRef = useRef<HTMLDivElement>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  // Pan state
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
 
   const scale = zoom / 100;
   const displayW = canvasWidth * scale;
   const displayH = canvasHeight * scale;
 
-  const handlePointerDown = (e: React.PointerEvent, idx: number) => {
+  // Wheel zoom
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const handleWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -10 : 10;
+        onZoomChange(Math.max(30, Math.min(250, zoom + delta)));
+      } else {
+        // Scroll to pan
+        setPan(p => ({
+          x: p.x - e.deltaX,
+          y: p.y - e.deltaY,
+        }));
+      }
+    };
+    el.addEventListener("wheel", handleWheel, { passive: false });
+    return () => el.removeEventListener("wheel", handleWheel);
+  }, [zoom, onZoomChange]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
+      if (e.key === "=" || e.key === "+") { e.preventDefault(); onZoomChange(Math.min(250, zoom + 10)); }
+      if (e.key === "-") { e.preventDefault(); onZoomChange(Math.max(30, zoom - 10)); }
+      if (e.key === "0") { e.preventDefault(); onZoomChange(100); setPan({ x: 0, y: 0 }); }
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [zoom, onZoomChange]);
+
+  // Middle-click or space+click panning
+  const handleContainerPointerDown = (e: React.PointerEvent) => {
+    // Middle mouse button (1) or space key held
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      setIsPanning(true);
+      panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    }
+  };
+
+  const handleContainerPointerMove = (e: React.PointerEvent) => {
+    if (isPanning) {
+      setPan({
+        x: panStart.current.panX + (e.clientX - panStart.current.x),
+        y: panStart.current.panY + (e.clientY - panStart.current.y),
+      });
+      return;
+    }
+    // Sticky note dragging
+    if (dragIdx === null) return;
+    const board = boardRef.current;
+    if (!board) return;
+    const rect = board.getBoundingClientRect();
+    const x = Math.max(0, Math.min(canvasWidth - 100, ((e.clientX - rect.left - dragOffset.x) / displayW) * canvasWidth));
+    const y = Math.max(0, Math.min(canvasHeight - 50, ((e.clientY - rect.top - dragOffset.y) / displayH) * canvasHeight));
+    onUpdateItem(dragIdx, { x, y });
+  };
+
+  const handleContainerPointerUp = () => {
+    setIsPanning(false);
+    onDragIdx(null);
+  };
+
+  const handleNotePointerDown = (e: React.PointerEvent, idx: number) => {
     if (connectMode) {
       onConnectClick(idx);
       return;
@@ -966,19 +1125,8 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
     });
     onDragIdx(idx);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    e.stopPropagation();
   };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (dragIdx === null) return;
-    const board = boardRef.current;
-    if (!board) return;
-    const rect = board.getBoundingClientRect();
-    const x = Math.max(0, Math.min(canvasWidth - 100, ((e.clientX - rect.left - dragOffset.x) / displayW) * canvasWidth));
-    const y = Math.max(0, Math.min(canvasHeight - 50, ((e.clientY - rect.top - dragOffset.y) / displayH) * canvasHeight));
-    onUpdateItem(dragIdx, { x, y });
-  };
-
-  const handlePointerUp = () => { onDragIdx(null); };
 
   // Build connector lines
   const connectors: { x1: number; y1: number; x2: number; y2: number; idx: number }[] = [];
@@ -1000,75 +1148,90 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
 
   return (
     <div
-      ref={boardRef}
-      className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : ""}`}
-      style={{ width: displayW, height: displayH, minHeight: 400 }}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      ref={containerRef}
+      className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : isPanning ? "cursor-grabbing" : "cursor-default"}`}
+      style={{ width: "100%", height: "100%", minHeight: 400 }}
+      onPointerDown={handleContainerPointerDown}
+      onPointerMove={handleContainerPointerMove}
+      onPointerUp={handleContainerPointerUp}
       onClick={() => { if (!connectMode) onEditIdx(null); }}
     >
-      {/* Dot grid */}
-      <div className="absolute inset-0 opacity-[0.04]" style={{
-        backgroundImage: "radial-gradient(circle, hsl(var(--foreground)) 1px, transparent 1px)",
-        backgroundSize: `${24 * scale}px ${24 * scale}px`,
-      }} />
+      {/* Pan hint */}
+      <div className="absolute bottom-3 left-3 z-50 text-[10px] text-muted-foreground/40 pointer-events-none">
+        Scroll to pan · Ctrl+Scroll to zoom · +/- keys · 0 to reset
+      </div>
 
-      {/* Connect mode indicator */}
-      {connectMode && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 glass rounded-full px-4 py-1.5 text-xs text-accent flex items-center gap-2">
-          <Link2 className="w-3 h-3" />
-          {connectFrom !== null ? "Click target note to connect" : "Click first note to start connection"}
-        </div>
-      )}
+      <div
+        ref={boardRef}
+        className="absolute"
+        style={{
+          width: displayW,
+          height: displayH,
+          transform: `translate(${pan.x}px, ${pan.y}px)`,
+          transformOrigin: "0 0",
+        }}
+      >
+        {/* Dot grid */}
+        <div className="absolute inset-0 opacity-[0.04]" style={{
+          backgroundImage: "radial-gradient(circle, hsl(var(--foreground)) 1px, transparent 1px)",
+          backgroundSize: `${24 * scale}px ${24 * scale}px`,
+        }} />
 
-      {/* SVG connectors */}
-      <svg className="absolute inset-0 pointer-events-none" width={displayW} height={displayH}>
-        {connectors.map((c, i) => {
-          const sx = (c.x1 / canvasWidth) * displayW;
-          const sy = (c.y1 / canvasHeight) * displayH;
-          const ex = (c.x2 / canvasWidth) * displayW;
-          const ey = (c.y2 / canvasHeight) * displayH;
-          const dx = ex - sx;
-          const dy = ey - sy;
-          // Curved connector
-          const mx = sx + dx * 0.5;
-          const my = sy + dy * 0.5 - Math.abs(dx) * 0.15;
-          return (
-            <g key={i}>
-              <path
-                d={`M ${sx} ${sy} Q ${mx} ${my} ${ex} ${ey}`}
-                fill="none"
-                stroke="hsl(var(--accent))"
-                strokeWidth={1.5}
-                strokeDasharray="6 3"
-                opacity={0.4}
-              />
-              {/* Arrow head */}
-              <circle cx={ex} cy={ey} r={3} fill="hsl(var(--accent))" opacity={0.4} />
-            </g>
-          );
-        })}
-      </svg>
+        {/* Connect mode indicator */}
+        {connectMode && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 glass rounded-full px-4 py-1.5 text-xs text-accent flex items-center gap-2">
+            <Link2 className="w-3 h-3" />
+            {connectFrom !== null ? "Click target note to connect" : "Click first note to start connection"}
+          </div>
+        )}
 
-      {items.map((item, i) => (
-        <StickyNote
-          key={i}
-          item={item}
-          index={i}
-          isEditing={editingIdx === i}
-          isDragging={dragIdx === i}
-          isConnectTarget={connectMode && connectFrom !== null && connectFrom !== i}
-          isConnectSource={connectFrom === i}
-          onPointerDown={(e) => handlePointerDown(e, i)}
-          onEdit={() => onEditIdx(i)}
-          onUpdate={(updates) => onUpdateItem(i, updates)}
-          onDelete={() => onDeleteItem(i)}
-          canvasWidth={canvasWidth}
-          canvasHeight={canvasHeight}
-          displayWidth={displayW}
-          displayHeight={displayH}
-        />
-      ))}
+        {/* SVG connectors */}
+        <svg className="absolute inset-0 pointer-events-none" width={displayW} height={displayH}>
+          {connectors.map((c, i) => {
+            const sx = (c.x1 / canvasWidth) * displayW;
+            const sy = (c.y1 / canvasHeight) * displayH;
+            const ex = (c.x2 / canvasWidth) * displayW;
+            const ey = (c.y2 / canvasHeight) * displayH;
+            const dx = ex - sx;
+            const dy = ey - sy;
+            const mx = sx + dx * 0.5;
+            const my = sy + dy * 0.5 - Math.abs(dx) * 0.15;
+            return (
+              <g key={i}>
+                <path
+                  d={`M ${sx} ${sy} Q ${mx} ${my} ${ex} ${ey}`}
+                  fill="none"
+                  stroke="hsl(var(--accent))"
+                  strokeWidth={1.5}
+                  strokeDasharray="6 3"
+                  opacity={0.4}
+                />
+                <circle cx={ex} cy={ey} r={3} fill="hsl(var(--accent))" opacity={0.4} />
+              </g>
+            );
+          })}
+        </svg>
+
+        {items.map((item, i) => (
+          <StickyNote
+            key={i}
+            item={item}
+            index={i}
+            isEditing={editingIdx === i}
+            isDragging={dragIdx === i}
+            isConnectTarget={connectMode && connectFrom !== null && connectFrom !== i}
+            isConnectSource={connectFrom === i}
+            onPointerDown={(e) => handleNotePointerDown(e, i)}
+            onEdit={() => onEditIdx(i)}
+            onUpdate={(updates) => onUpdateItem(i, updates)}
+            onDelete={() => onDeleteItem(i)}
+            canvasWidth={canvasWidth}
+            canvasHeight={canvasHeight}
+            displayWidth={displayW}
+            displayHeight={displayH}
+          />
+        ))}
+      </div>
     </div>
   );
 }
