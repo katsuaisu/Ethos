@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Send, Loader2, Sparkles, Trash2, Plus, FolderOpen, Save } from "lucide-react";
+import { Send, Loader2, Sparkles, Trash2, Plus, FolderOpen } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 type Msg = { role: "user" | "assistant"; content: string };
@@ -65,7 +65,6 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
     if (activeId && messages.length > 0) {
       setSessions(prev => prev.map(s => s.id === activeId ? { ...s, messages, date: new Date().toISOString() } : s));
     }
-    // Share user ideas with parent
     if (onShareIdeas) {
       const userIdeas = messages.filter(m => m.role === "user").map(m => m.content);
       onShareIdeas(userIdeas);
@@ -85,7 +84,6 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
   };
 
   const newChat = () => {
-    // Auto-save current if has messages
     if (messages.length > 0 && !activeId) saveCurrentChat();
     setMessages([]);
     setActiveId(null);
@@ -112,7 +110,6 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
 
-    // Auto-create session on first message
     if (!activeId && messages.length === 0) {
       const id = Date.now().toString();
       const session: ChatSession = { id, name: text.slice(0, 40), messages: [userMsg], date: new Date().toISOString() };
@@ -224,13 +221,30 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain scrollbar-thin px-4 py-3 space-y-4" style={{ minHeight: 0, WebkitOverflowScrolling: "touch" }}>
         {messages.length === 0 && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center justify-center h-full text-center py-16">
-            <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center mb-4">
-              <Sparkles className="w-5 h-5 text-accent" />
+            <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mb-5">
+              <Sparkles className="w-6 h-6 text-accent" />
             </div>
-            <h3 className="text-xl text-serif mb-2">Start ideating</h3>
-            <p className="text-sm text-muted-foreground max-w-[260px] leading-relaxed">
-              Ask me anything — brainstorm ideas, structure thoughts, or explore concepts together.
+            <h3 className="text-2xl text-serif mb-3">Welcome to Ethos</h3>
+            <p className="text-sm text-muted-foreground max-w-[320px] leading-relaxed mb-6">
+              Your AI-powered creative workspace for brainstorming, organizing ideas, and turning thoughts into visual boards, presentations, and documents.
             </p>
+            <div className="grid grid-cols-1 gap-2 text-left max-w-[300px] w-full">
+              {[
+                { emoji: "💡", title: "Ideate", desc: "Brainstorm and structure your ideas with AI" },
+                { emoji: "📸", title: "Scan", desc: "Analyze images, PDFs, and docs for insights" },
+                { emoji: "🎨", title: "Preview", desc: "Generate visual boards — mindmaps, flowcharts, grids" },
+                { emoji: "🔄", title: "Sync", desc: "Push your boards directly to Miro" },
+              ].map(item => (
+                <div key={item.title} className="flex items-start gap-3 bg-secondary/30 rounded-xl px-3 py-2.5">
+                  <span className="text-lg">{item.emoji}</span>
+                  <div>
+                    <p className="text-xs font-medium text-foreground">{item.title}</p>
+                    <p className="text-[11px] text-muted-foreground leading-snug">{item.desc}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground/60 mt-6">Start by typing anything below ↓</p>
           </motion.div>
         )}
 
