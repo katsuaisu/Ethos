@@ -222,7 +222,10 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
         {messages.length === 0 && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center justify-center h-full text-center py-16">
             <div className="w-14 h-14 rounded-2xl border border-border flex items-center justify-center mb-5">
-              <span className="text-serif text-2xl text-foreground">e</span>
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" className="text-foreground">
+                <path d="M12 2L14.09 8.26L20.18 8.63L15.54 12.74L17.09 19.37L12 15.77L6.91 19.37L8.46 12.74L3.82 8.63L9.91 8.26L12 2Z" fill="currentColor" opacity="0.9"/>
+                <circle cx="12" cy="12" r="3" fill="hsl(var(--background))" />
+              </svg>
             </div>
             <h3 className="text-2xl text-serif mb-3">Ethos</h3>
             <p className="text-sm text-muted-foreground max-w-[320px] leading-relaxed mb-6">

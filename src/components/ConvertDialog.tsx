@@ -44,7 +44,7 @@ interface SlideTheme {
   bulletColor: string;
   titleFont: string;
   bodyFont: string;
-  style: "elegant" | "bold" | "playful" | "minimal" | "dark";
+  style: "elegant" | "bold" | "playful" | "minimal" | "dark" | "warm" | "retro" | "nature";
 }
 
 const SLIDE_THEMES: SlideTheme[] = [
@@ -90,6 +90,48 @@ const SLIDE_THEMES: SlideTheme[] = [
     titleColor: "2A1E12", textColor: "4A3620", subtitleColor: "B8956A", bulletColor: "D4A574",
     titleFont: "Georgia", bodyFont: "Calibri", style: "elegant",
   },
+  {
+    name: "Rose Gold",
+    titleBg: "FFF5F5", contentBg: "FFFAFA", accentColor: "C9787C", accent2Color: "E8B4B8",
+    titleColor: "3D1A1D", textColor: "5A2D30", subtitleColor: "B06B6F", bulletColor: "C9787C",
+    titleFont: "Georgia", bodyFont: "Calibri", style: "warm",
+  },
+  {
+    name: "Midnight Navy",
+    titleBg: "0F1729", contentBg: "151E33", accentColor: "5B8DEF", accent2Color: "8FB5F5",
+    titleColor: "E8EDF5", textColor: "B0BDD4", subtitleColor: "6B7FA0", bulletColor: "5B8DEF",
+    titleFont: "Georgia", bodyFont: "Calibri", style: "dark",
+  },
+  {
+    name: "Sage Garden",
+    titleBg: "EFF3EC", contentBg: "F7F9F5", accentColor: "7DA47A", accent2Color: "A8C9A5",
+    titleColor: "1C2B1A", textColor: "344032", subtitleColor: "6B8F68", bulletColor: "7DA47A",
+    titleFont: "Georgia", bodyFont: "Calibri", style: "nature",
+  },
+  {
+    name: "Coral Reef",
+    titleBg: "FFF2EE", contentBg: "FFF9F7", accentColor: "FF6B6B", accent2Color: "FFA0A0",
+    titleColor: "2D1111", textColor: "4A2020", subtitleColor: "D45555", bulletColor: "FF6B6B",
+    titleFont: "Georgia", bodyFont: "Calibri", style: "bold",
+  },
+  {
+    name: "Mauve Noir",
+    titleBg: "1A141F", contentBg: "221B28", accentColor: "B07CC5", accent2Color: "D4A8E2",
+    titleColor: "F0E5F5", textColor: "C5B0D0", subtitleColor: "8A6FA0", bulletColor: "B07CC5",
+    titleFont: "Georgia", bodyFont: "Calibri", style: "dark",
+  },
+  {
+    name: "Honey Butter",
+    titleBg: "FFF8E7", contentBg: "FFFCF0", accentColor: "E6A817", accent2Color: "F0CB60",
+    titleColor: "2A2008", textColor: "4A3D15", subtitleColor: "C49210", bulletColor: "E6A817",
+    titleFont: "Georgia", bodyFont: "Calibri", style: "warm",
+  },
+  {
+    name: "Arctic Ice",
+    titleBg: "F0F5FA", contentBg: "F7FAFC", accentColor: "5AA3C7", accent2Color: "8FC5DD",
+    titleColor: "0E2030", textColor: "1E3A50", subtitleColor: "4A8EB0", bulletColor: "5AA3C7",
+    titleFont: "Calibri Light", bodyFont: "Calibri", style: "minimal",
+  },
 ];
 
 // Parse AI-generated markdown into structured slide data
@@ -101,12 +143,26 @@ interface SlideData {
   layout?: "title" | "content" | "two-column" | "quote" | "stats" | "big-statement";
 }
 
+// Strip all markdown formatting so text is clean in slides
+function stripMd(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/__(.+?)__/g, "$1")
+    .replace(/_(.+?)_/g, "$1")
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/~~(.+?)~~/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^#+\s*/, "")
+    .trim();
+}
+
 function parseSlides(md: string): SlideData[] {
   const slides: SlideData[] = [];
   const sections = md.split(/^## /gm).filter(Boolean);
   for (const section of sections) {
     const lines = section.trim().split("\n");
-    const title = lines[0]?.replace(/^#+\s*/, "").replace(/Slide\s*\d+[:\s-]*/i, "").trim() || "Untitled";
+    const title = stripMd(lines[0]?.replace(/^#+\s*/, "").replace(/Slide\s*\d+[:\s-]*/i, "").trim() || "Untitled");
     const bullets: string[] = [];
     let notes = "";
     let subtitle = "";
@@ -116,18 +172,18 @@ function parseSlides(md: string): SlideData[] {
       const line = lines[i].trim();
       if (/speaker\s*notes?/i.test(line) || /^notes?:/i.test(line)) { inNotes = true; continue; }
       if (/^layout:\s*/i.test(line)) { layout = line.replace(/^layout:\s*/i, "").trim() as SlideData["layout"]; continue; }
-      if (/^subtitle:\s*/i.test(line)) { subtitle = line.replace(/^subtitle:\s*/i, "").trim(); continue; }
-      if (inNotes) { if (line) notes += (notes ? " " : "") + line.replace(/^[-*]\s*/, ""); continue; }
+      if (/^subtitle:\s*/i.test(line)) { subtitle = stripMd(line.replace(/^subtitle:\s*/i, "").trim()); continue; }
+      if (inNotes) { if (line) notes += (notes ? " " : "") + stripMd(line.replace(/^[-*]\s*/, "")); continue; }
       if (line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ")) {
-        bullets.push(line.replace(/^[-*•]\s*/, ""));
+        bullets.push(stripMd(line.replace(/^[-*•]\s*/, "")));
       } else if (line && !line.startsWith("#") && !line.startsWith("---")) {
-        if (!subtitle && bullets.length === 0) subtitle = line;
-        else bullets.push(line);
+        if (!subtitle && bullets.length === 0) subtitle = stripMd(line);
+        else bullets.push(stripMd(line));
       }
     }
     if (title || bullets.length) slides.push({ title, subtitle, bullets: bullets.slice(0, 8), notes, layout });
   }
-  return slides.length > 0 ? slides : [{ title: "Board Content", bullets: md.split("\n").filter(l => l.trim()).slice(0, 8), notes: "" }];
+  return slides.length > 0 ? slides : [{ title: "Board Content", bullets: md.split("\n").filter(l => l.trim()).slice(0, 8).map(stripMd), notes: "" }];
 }
 
 // Parse markdown into document sections
@@ -195,8 +251,8 @@ function exportPPTX(content: string, theme: SlideTheme) {
   pptx.author = "Ethos";
 
   const isDark = theme.style === "dark";
-  const W = 13.33; // slide width in inches
-  const H = 7.5;   // slide height
+  const W = 13.33;
+  const H = 7.5;
 
   // ── Decorative layer helpers ──
   function addAccentStrip(slide: any, position: "top" | "bottom" | "left") {
@@ -231,6 +287,27 @@ function exportPPTX(content: string, theme: SlideTheme) {
     addShape(slide, "rect", { x, y, w, h, fill: { color: theme.accentColor } });
   }
 
+  // Additional creative decorators
+  function addDiamondCluster(slide: any, x: number, y: number, transparency = 85) {
+    const s = 0.3;
+    addShape(slide, "rect", { x, y, w: s, h: s, fill: { color: theme.accentColor, transparency }, rotate: 45 });
+    addShape(slide, "rect", { x: x + 0.4, y: y + 0.15, w: s * 0.6, h: s * 0.6, fill: { color: theme.accent2Color, transparency: transparency - 5 }, rotate: 45 });
+  }
+
+  function addWaveDecor(slide: any, y: number, transparency = 90) {
+    for (let i = 0; i < 8; i++) {
+      addShape(slide, "ellipse", {
+        x: i * 1.7 - 0.3, y: y + (i % 2 === 0 ? 0 : 0.15), w: 2, h: 0.6,
+        fill: { color: i % 2 === 0 ? theme.accentColor : theme.accent2Color, transparency },
+      });
+    }
+  }
+
+  function addCornerTriangles(slide: any) {
+    addShape(slide, "triangle", { x: -0.3, y: -0.3, w: 1.5, h: 1.5, fill: { color: theme.accentColor, transparency: 92 }, rotate: 0 });
+    addShape(slide, "triangle", { x: W - 1.2, y: H - 1.2, w: 1.5, h: 1.5, fill: { color: theme.accent2Color, transparency: 92 }, rotate: 180 });
+  }
+
   function addSlideNumber(slide: any, num: number, total: number) {
     slide.addText(`${num} / ${total}`, {
       x: W - 1.5, y: H - 0.5, w: 1.2, h: 0.3,
@@ -238,7 +315,7 @@ function exportPPTX(content: string, theme: SlideTheme) {
     });
   }
 
-  const totalSlides = slides.length + 1; // +1 for end slide
+  const totalSlides = slides.length + 1;
 
   // ══════════════════════════════════
   // SLIDE 1: TITLE — Full-bleed hero
@@ -246,17 +323,24 @@ function exportPPTX(content: string, theme: SlideTheme) {
   const s1 = pptx.addSlide();
   s1.background = { color: theme.titleBg };
 
-  // Large decorative blob top-right
+  // Creative decorations based on theme style
   addCornerBlob(s1, "tr", 5, 85);
   addSecondaryBlob(s1, W - 2.5, 0.5, 2.5, 90);
-
-  // Bottom-left subtle blob
   addSecondaryBlob(s1, -1, H - 2.5, 3, 93);
 
-  // Dot grid decoration
-  if (theme.style !== "minimal") addDotGrid(s1, 1, 5.5, 6, 3);
+  if (theme.style === "elegant" || theme.style === "warm") {
+    addDiamondCluster(s1, W - 3, 5.5);
+    addDotGrid(s1, 1, 5.5, 6, 3);
+  } else if (theme.style === "bold" || theme.style === "retro") {
+    addCornerTriangles(s1);
+    addDotGrid(s1, 1, 5.8, 8, 2);
+  } else if (theme.style === "playful" || theme.style === "nature") {
+    addWaveDecor(s1, H - 0.8, 93);
+    addDiamondCluster(s1, 10, 5.2, 88);
+  } else if (theme.style !== "minimal") {
+    addDotGrid(s1, 1, 5.5, 6, 3);
+  }
 
-  // Accent strip
   addAccentStrip(s1, "left");
   addAccentStrip(s1, "bottom");
 
@@ -310,6 +394,8 @@ function exportPPTX(content: string, theme: SlideTheme) {
     addAccentStrip(slide, "left");
     if (i % 2 === 0) addCornerBlob(slide, "br", 2.5, 93);
     if (i % 3 === 0) addSecondaryBlob(slide, W - 1.5, 0.3, 1.5, 94);
+    if (i % 4 === 0) addDiamondCluster(slide, W - 2, H - 1.5, 90);
+    if (i % 5 === 0 && theme.style !== "minimal") addDotGrid(slide, 0.5, H - 1, 4, 2);
 
     addSlideNumber(slide, i + 1, totalSlides);
 
@@ -799,7 +885,7 @@ export default function ConvertDialog({ items, onClose }: ConvertDialogProps) {
     const moodContext = moodboardDesc ? `\n\nMoodboard/Inspiration: ${moodboardDesc}` : "";
 
     const formatPrompts: Record<OutputFormat, string> = {
-      slides: `Convert this board content into a beautifully structured slide presentation that could WIN a competition. Create slides that are visually engaging and tell a compelling story.\n\nFor each slide provide:\n- ## Slide Title\n- subtitle: A short subtitle\n- layout: (one of: title, content, two-column, quote, stats, big-statement)\n- Bullet points (key insights, not just lists)\n- Speaker Notes: detailed talking points\n\nDesign guidelines:\n- First slide should be a powerful title slide with a subtitle\n- Use storytelling flow: hook > problem > solution > impact > call to action\n- Keep bullet points concise and impactful (max 4-5 per slide)\n- Include a closing slide\n- Make titles catchy and memorable\n- Vary the layout types for visual interest — use quote for powerful quotes, stats for data, big-statement for key takeaways, two-column for comparisons\n- Create 8-12 slides for a complete presentation\n\nBoard content:\n- ${boardData}${answersContext}${moodContext}\n\n${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format as clean markdown with ## for each slide.`,
+      slides: `Convert this board content into a beautifully structured slide presentation that could WIN a design competition. Create slides that tell a compelling story.\n\nCRITICAL FORMATTING RULES:\n- Do NOT use markdown formatting like **bold**, *italic*, __underline__, or \`code\`. Write plain text only.\n- Do NOT use asterisks, underscores, or backticks in any text.\n- All text should be clean, ready to display directly on a slide.\n\nFor each slide provide:\n- ## Slide Title (plain text, no bold/italic)\n- subtitle: A short subtitle\n- layout: (one of: title, content, two-column, quote, stats, big-statement)\n- Bullet points using - prefix (key insights, plain text)\n- Speaker Notes: detailed talking points\n\nDesign guidelines:\n- First slide should be a powerful title slide with a subtitle\n- Storytelling flow: hook > problem > solution > impact > call to action\n- Keep bullet points concise and impactful (max 4-5 per slide)\n- Include a closing slide\n- Make titles catchy and memorable\n- Vary layout types for visual interest: quote for powerful quotes, stats for data, big-statement for key takeaways, two-column for comparisons\n- Create 8-12 slides for a complete presentation\n- Write like a world-class copywriter: punchy, memorable, emotionally resonant\n\nBoard content:\n- ${boardData}${answersContext}${moodContext}\n\n${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format as clean markdown with ## for each slide. Remember: NO bold, NO italic, NO markdown formatting in content text.`,
       document: `Convert this board content into a well-formatted ${docStyle} document. ${
         docStyle === "flowchart" ? "Include a text-based flowchart using arrows and boxes." :
         docStyle === "report" ? "Structure with executive summary, sections, and conclusion." :

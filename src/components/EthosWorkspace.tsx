@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { motion } from "framer-motion";
 import { MessageSquare, Image, Layout, ArrowRightLeft } from "lucide-react";
 import AIChatPanel from "./AIChatPanel";
@@ -6,6 +6,37 @@ import ScanPanel from "./ScanPanel";
 import InteractivePreview from "./InteractivePreview";
 import MiroSyncPanel, { pushItemsToMiro } from "./MiroSyncPanel";
 import { toast } from "sonner";
+
+const ACCENT_KEY = "ethos-accent-color";
+const DEFAULT_ACCENT = "24 80% 55%"; // orange
+
+function hexToHsl(hex: string): string {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h = 0, s = 0;
+  const l = (max + min) / 2;
+  if (max !== min) {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+    else if (max === g) h = ((b - r) / d + 2) / 6;
+    else h = ((r - g) / d + 4) / 6;
+  }
+  return `${Math.round(h * 360)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%`;
+}
+
+function hslToHex(hsl: string): string {
+  const [h, s, l] = hsl.split(/\s+/).map((v, i) => i === 0 ? parseInt(v) : parseInt(v) / 100);
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const k = (n + h / 30) % 12;
+    const color = l - a * Math.max(Math.min(k - 3, 9 - k, 1), -1);
+    return Math.round(255 * color).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
 
 type Tab = "chat" | "image" | "preview" | "miro";
 
@@ -16,13 +47,34 @@ const tabs: { id: Tab; label: string; icon: typeof MessageSquare }[] = [
   { id: "miro", label: "Sync", icon: ArrowRightLeft },
 ];
 
+const ACCENT_PRESETS = [
+  { name: "Orange", hsl: "24 80% 55%" },
+  { name: "Rose", hsl: "340 65% 55%" },
+  { name: "Violet", hsl: "270 60% 55%" },
+  { name: "Blue", hsl: "210 70% 50%" },
+  { name: "Teal", hsl: "175 60% 42%" },
+  { name: "Green", hsl: "145 55% 42%" },
+  { name: "Amber", hsl: "38 90% 50%" },
+  { name: "Red", hsl: "0 70% 52%" },
+];
+
 export default function EthosWorkspace() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [miroBoardId, setMiroBoardId] = useState<string>("");
+  const [accentHsl, setAccentHsl] = useState<string>(() => {
+    try { return localStorage.getItem(ACCENT_KEY) || DEFAULT_ACCENT; } catch { return DEFAULT_ACCENT; }
+  });
 
   // Shared state for importing scan data into preview
   const [sharedPalette, setSharedPalette] = useState<Record<string, string> | null>(null);
   const [sharedIdeas, setSharedIdeas] = useState<string[]>([]);
+
+  // Apply accent color to CSS
+  useEffect(() => {
+    document.documentElement.style.setProperty("--accent", accentHsl);
+    document.documentElement.style.setProperty("--ring", accentHsl);
+    localStorage.setItem(ACCENT_KEY, accentHsl);
+  }, [accentHsl]);
 
   const handlePushToMiro = useCallback(async (items: any[]) => {
     if (!miroBoardId) {
@@ -55,7 +107,10 @@ export default function EthosWorkspace() {
       <header className="px-6 py-3 flex items-center justify-between border-b border-border/30 shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg border border-border flex items-center justify-center">
-            <span className="text-serif text-base font-normal text-foreground leading-none">e</span>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-foreground">
+              <path d="M12 2L14.09 8.26L20.18 8.63L15.54 12.74L17.09 19.37L12 15.77L6.91 19.37L8.46 12.74L3.82 8.63L9.91 8.26L12 2Z" fill="currentColor" opacity="0.9"/>
+              <circle cx="12" cy="12" r="3" fill="hsl(var(--background))" />
+            </svg>
           </div>
           <div>
             <h1 className="text-serif text-xl leading-none">Ethos</h1>
@@ -104,7 +159,7 @@ export default function EthosWorkspace() {
           <div className="flex-1 max-w-3xl mx-auto">
             <AIChatPanel onShareIdeas={handleShareIdeas} />
           </div>
-          <IdeationSidebar sharedIdeas={sharedIdeas} />
+          <IdeationSidebar sharedIdeas={sharedIdeas} accentHsl={accentHsl} onAccentChange={setAccentHsl} />
         </div>
 
         {/* Scan — full page */}
@@ -135,9 +190,39 @@ export default function EthosWorkspace() {
 
 /* ── Sidebars ── */
 
-function IdeationSidebar({ sharedIdeas }: { sharedIdeas: string[] }) {
+function IdeationSidebar({ sharedIdeas, accentHsl, onAccentChange }: { sharedIdeas: string[]; accentHsl: string; onAccentChange: (hsl: string) => void }) {
   return (
     <div className="hidden lg:flex w-72 xl:w-80 flex-col border-l border-border/30 p-5 gap-5 overflow-y-auto scrollbar-thin">
+      {/* Accent Color Picker */}
+      <div className="glass rounded-xl p-4">
+        <h4 className="text-serif text-sm mb-3">Accent Color</h4>
+        <div className="grid grid-cols-4 gap-2 mb-3">
+          {ACCENT_PRESETS.map((preset) => (
+            <button
+              key={preset.name}
+              onClick={() => onAccentChange(preset.hsl)}
+              className={`group flex flex-col items-center gap-1`}
+              title={preset.name}
+            >
+              <div
+                className={`w-7 h-7 rounded-full border-2 transition-all ${accentHsl === preset.hsl ? "border-foreground scale-110" : "border-transparent hover:scale-105"}`}
+                style={{ backgroundColor: `hsl(${preset.hsl})` }}
+              />
+              <span className="text-[9px] text-muted-foreground">{preset.name}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-[10px] text-muted-foreground">Custom</label>
+          <input
+            type="color"
+            value={hslToHex(accentHsl)}
+            onChange={(e) => onAccentChange(hexToHsl(e.target.value))}
+            className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent"
+          />
+        </div>
+      </div>
+
       <div className="glass rounded-xl p-4">
         <h4 className="text-serif text-sm mb-3">Layout DNA</h4>
         <div className="flex items-center gap-3 p-2 rounded-lg bg-secondary/50">
