@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from "react";
-import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw } from "lucide-react";
+import { useState, useCallback, useEffect, useRef } from "react";
+import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, Type } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
@@ -11,6 +11,8 @@ interface LayoutItem {
   y: number;
   type: string;
   color?: string;
+  width?: number;
+  height?: number;
 }
 
 interface PreviewEntry {
@@ -32,6 +34,15 @@ function loadHistory(): PreviewEntry[] {
   } catch { return []; }
 }
 
+const STICKY_COLORS = [
+  { name: "Cream", hex: "#FFF9DB" },
+  { name: "Mint", hex: "#D4EDDA" },
+  { name: "Rose", hex: "#FDE8E8" },
+  { name: "Sky", hex: "#E3F2FD" },
+  { name: "Lavender", hex: "#F3E5F5" },
+  { name: "Peach", hex: "#FFE8D6" },
+];
+
 export default function InteractivePreview({ onPushToMiro }: PreviewProps) {
   const [input, setInput] = useState("");
   const [items, setItems] = useState<LayoutItem[]>([]);
@@ -39,6 +50,8 @@ export default function InteractivePreview({ onPushToMiro }: PreviewProps) {
   const [status, setStatus] = useState("");
   const [layoutType, setLayoutType] = useState<"grid" | "mindmap" | "timeline">("grid");
   const [history, setHistory] = useState<PreviewEntry[]>(loadHistory);
+  const [editingIdx, setEditingIdx] = useState<number | null>(null);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(history.slice(0, 10)));
@@ -53,18 +66,18 @@ export default function InteractivePreview({ onPushToMiro }: PreviewProps) {
       const layoutPrompts: Record<string, string> = {
         grid: `Organize these ideas into a clean grid layout. Return ONLY a JSON array where each item has:
 {"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex"}
-Use 300px spacing. Use soft warm pastels (#FFF9DB, #E8F5E9, #FDE8E8, #E3F2FD, #F3E5F5). Max 12 items. Group related ideas together.`,
+Use 300px spacing. Use soft warm pastels (#FFF9DB, #D4EDDA, #FDE8E8, #E3F2FD, #F3E5F5, #FFE8D6). Max 12 items. Group related ideas together.`,
         mindmap: `Create a mindmap layout from these ideas. Return ONLY a JSON array where:
-- The central topic is at x:600, y:300 with type "central"
-- Main branches radiate outward at x values 200-1000, y values 100-500
+- The central topic is at x:500, y:250 with type "central"
+- Main branches radiate outward
 - Sub-items are near their parent branches
 Each: {"content": "text", "x": number, "y": number, "type": "branch"|"central"|"leaf", "color": "#hex"}
-Use warm tones: central=#1A1A1A, branches=#E8825B (accent), leaves=#F5F0EB. Max 15 items.`,
-        timeline: `Organize these ideas into a horizontal timeline layout. Return ONLY a JSON array where:
+Use: central=#FFF9DB, branches=#FFE8D6, leaves=#E3F2FD. Max 15 items.`,
+        timeline: `Organize these ideas into a horizontal timeline. Return ONLY a JSON array where:
 - Items flow left to right with x starting at 50 and incrementing by 280
-- y values alternate between 50 and 200 for visual interest
+- y values alternate between 80 and 220 for visual interest
 Each: {"content": "text", "x": number, "y": number, "type": "milestone"|"event", "color": "#hex"}
-Use soft palette. Max 10 items. Add brief descriptive content.`,
+Use soft pastels. Max 10 items.`,
       };
 
       const resp = await fetch(CHAT_URL, {
@@ -74,12 +87,7 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
         body: JSON.stringify({
-          messages: [
-            {
-              role: "user",
-              content: `${layoutPrompts[layoutType]}\n\nContent to organize:\n\n${input}`,
-            },
-          ],
+          messages: [{ role: "user", content: `${layoutPrompts[layoutType]}\n\nContent to organize:\n\n${input}` }],
           mode: "layout",
         }),
       });
@@ -117,16 +125,8 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
       setItems(newItems);
 
       if (newItems.length > 0) {
-        const entry: PreviewEntry = {
-          id: Date.now().toString(),
-          input: input.slice(0, 100),
-          items: newItems,
-          layoutType,
-          date: new Date().toISOString(),
-        };
-        setHistory(prev => [entry, ...prev]);
+        setHistory(prev => [{ id: Date.now().toString(), input: input.slice(0, 100), items: newItems, layoutType, date: new Date().toISOString() }, ...prev]);
       }
-
       setStatus("");
     } catch (e) {
       console.error(e);
@@ -135,6 +135,26 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
       setGenerating(false);
     }
   }, [input, layoutType]);
+
+  const addStickyNote = () => {
+    const newItem: LayoutItem = {
+      content: "New note",
+      x: 50 + Math.random() * 200,
+      y: 50 + Math.random() * 200,
+      type: "sticky_note",
+      color: STICKY_COLORS[Math.floor(Math.random() * STICKY_COLORS.length)].hex,
+    };
+    setItems(prev => [...prev, newItem]);
+  };
+
+  const updateItem = (idx: number, updates: Partial<LayoutItem>) => {
+    setItems(prev => prev.map((item, i) => i === idx ? { ...item, ...updates } : item));
+  };
+
+  const deleteItem = (idx: number) => {
+    setItems(prev => prev.filter((_, i) => i !== idx));
+    setEditingIdx(null);
+  };
 
   const layoutOptions = [
     { value: "grid" as const, label: "Grid", icon: Layout },
@@ -192,7 +212,7 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
         </div>
       </div>
 
-      {/* Preview canvas */}
+      {/* Interactive canvas */}
       <div className="flex-1 overflow-auto p-4" style={{ minHeight: 0 }}>
         <AnimatePresence mode="wait">
           {items.length > 0 ? (
@@ -202,16 +222,41 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
               animate={{ opacity: 1, scale: 1 }}
               className="space-y-3"
             >
-              {/* Board visualization */}
-              <div className="glass rounded-xl p-4 overflow-auto">
-                {layoutType === "mindmap" ? (
-                  <MindmapBoard items={items} />
-                ) : layoutType === "timeline" ? (
-                  <TimelineBoard items={items} />
-                ) : (
-                  <GridBoard items={items} />
-                )}
+              {/* Toolbar */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={addStickyNote}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs hover:bg-secondary/80 transition-colors"
+                >
+                  <Plus className="w-3 h-3" />
+                  Add Note
+                </button>
+                <div className="flex gap-1 ml-auto">
+                  {STICKY_COLORS.map((c) => (
+                    <button
+                      key={c.hex}
+                      onClick={() => {
+                        if (editingIdx !== null) updateItem(editingIdx, { color: c.hex });
+                      }}
+                      className="w-4 h-4 rounded-full border border-border/50 hover:scale-125 transition-transform"
+                      style={{ backgroundColor: c.hex }}
+                      title={c.name}
+                    />
+                  ))}
+                </div>
               </div>
+
+              {/* Interactive board */}
+              <InteractiveBoard
+                items={items}
+                layoutType={layoutType}
+                editingIdx={editingIdx}
+                onEditIdx={setEditingIdx}
+                onUpdateItem={updateItem}
+                onDeleteItem={deleteItem}
+                dragIdx={dragIdx}
+                onDragIdx={setDragIdx}
+              />
 
               {/* Actions */}
               <div className="flex gap-2">
@@ -243,7 +288,6 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
               <p className="text-sm text-muted-foreground">Preview will appear here</p>
               <p className="text-xs text-muted-foreground/60 mt-1">Brain dump above, then preview before committing</p>
 
-              {/* History */}
               {history.length > 0 && (
                 <div className="mt-6 w-full max-w-xs">
                   <h5 className="text-serif text-xs text-muted-foreground mb-2">Recent Previews</h5>
@@ -269,132 +313,182 @@ Use soft palette. Max 10 items. Add brief descriptive content.`,
   );
 }
 
-/* ── Board renderers ── */
+/* ── Interactive Board ── */
 
-function GridBoard({ items }: { items: LayoutItem[] }) {
+interface BoardProps {
+  items: LayoutItem[];
+  layoutType: string;
+  editingIdx: number | null;
+  onEditIdx: (idx: number | null) => void;
+  onUpdateItem: (idx: number, updates: Partial<LayoutItem>) => void;
+  onDeleteItem: (idx: number) => void;
+  dragIdx: number | null;
+  onDragIdx: (idx: number | null) => void;
+}
+
+function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateItem, onDeleteItem, dragIdx, onDragIdx }: BoardProps) {
+  const boardRef = useRef<HTMLDivElement>(null);
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
+
+  const handlePointerDown = (e: React.PointerEvent, idx: number) => {
+    if (editingIdx === idx) return; // don't drag while editing
+    const board = boardRef.current;
+    if (!board) return;
+    const rect = board.getBoundingClientRect();
+    const item = items[idx];
+    setDragOffset({
+      x: e.clientX - rect.left - (item.x / 1200) * rect.width,
+      y: e.clientY - rect.top - (item.y / 600) * rect.height,
+    });
+    onDragIdx(idx);
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (dragIdx === null) return;
+    const board = boardRef.current;
+    if (!board) return;
+    const rect = board.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1100, ((e.clientX - rect.left - dragOffset.x) / rect.width) * 1200));
+    const y = Math.max(0, Math.min(500, ((e.clientY - rect.top - dragOffset.y) / rect.height) * 600));
+    onUpdateItem(dragIdx, { x, y });
+  };
+
+  const handlePointerUp = () => {
+    onDragIdx(null);
+  };
+
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+    <div
+      ref={boardRef}
+      className="glass rounded-xl p-2 relative overflow-hidden cursor-crosshair select-none"
+      style={{ minHeight: 380 }}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onClick={() => onEditIdx(null)}
+    >
+      {/* Grid dots background */}
+      <div className="absolute inset-0 opacity-[0.03]" style={{
+        backgroundImage: "radial-gradient(circle, hsl(var(--foreground)) 1px, transparent 1px)",
+        backgroundSize: "24px 24px",
+      }} />
+
       {items.map((item, i) => (
-        <motion.div
+        <StickyNote
           key={i}
-          initial={{ opacity: 0, scale: 0.85 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: i * 0.06 }}
-          className="rounded-xl p-3 text-xs leading-relaxed shadow-sm border border-border/30"
-          style={{ backgroundColor: item.color || "hsl(var(--secondary))" }}
-        >
-          {item.content}
-        </motion.div>
+          item={item}
+          index={i}
+          isEditing={editingIdx === i}
+          isDragging={dragIdx === i}
+          onPointerDown={(e) => handlePointerDown(e, i)}
+          onEdit={() => onEditIdx(i)}
+          onUpdate={(updates) => onUpdateItem(i, updates)}
+          onDelete={() => onDeleteItem(i)}
+          boardWidth={boardRef.current?.clientWidth || 400}
+          boardHeight={boardRef.current?.clientHeight || 380}
+        />
       ))}
     </div>
   );
 }
 
-function MindmapBoard({ items }: { items: LayoutItem[] }) {
-  const central = items.find(i => i.type === "central");
-  const branches = items.filter(i => i.type === "branch");
-  const leaves = items.filter(i => i.type === "leaf");
-
-  return (
-    <div className="relative min-h-[350px]">
-      {/* Central node */}
-      {central && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.5 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10"
-        >
-          <div className="bg-primary text-primary-foreground px-4 py-2 rounded-xl text-sm font-medium shadow-lg max-w-[160px] text-center">
-            {central.content}
-          </div>
-        </motion.div>
-      )}
-
-      {/* Branches */}
-      {branches.map((item, i) => {
-        const angle = (i / branches.length) * 2 * Math.PI - Math.PI / 2;
-        const radius = 130;
-        const x = 50 + Math.cos(angle) * (radius / 4);
-        const y = 50 + Math.sin(angle) * (radius / 3.5);
-
-        return (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, scale: 0.7 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.2 + i * 0.08 }}
-            className="absolute z-5"
-            style={{ left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)" }}
-          >
-            <div
-              className="px-3 py-1.5 rounded-lg text-xs shadow-sm border border-border/30 max-w-[140px] text-center"
-              style={{ backgroundColor: item.color || "hsl(24 80% 55% / 0.15)" }}
-            >
-              {item.content}
-            </div>
-          </motion.div>
-        );
-      })}
-
-      {/* Leaves */}
-      {leaves.map((item, i) => {
-        const angle = (i / Math.max(leaves.length, 1)) * 2 * Math.PI;
-        const radius = 170;
-        const x = 50 + Math.cos(angle) * (radius / 3.5);
-        const y = 50 + Math.sin(angle) * (radius / 3);
-
-        return (
-          <motion.div
-            key={`leaf-${i}`}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.4 + i * 0.05 }}
-            className="absolute"
-            style={{ left: `${x}%`, top: `${y}%`, transform: "translate(-50%, -50%)" }}
-          >
-            <div
-              className="px-2.5 py-1 rounded-md text-[11px] border border-border/20 max-w-[120px] text-center text-muted-foreground"
-              style={{ backgroundColor: item.color || "hsl(var(--secondary))" }}
-            >
-              {item.content}
-            </div>
-          </motion.div>
-        );
-      })}
-    </div>
-  );
+interface StickyNoteProps {
+  item: LayoutItem;
+  index: number;
+  isEditing: boolean;
+  isDragging: boolean;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onEdit: () => void;
+  onUpdate: (updates: Partial<LayoutItem>) => void;
+  onDelete: () => void;
+  boardWidth: number;
+  boardHeight: number;
 }
 
-function TimelineBoard({ items }: { items: LayoutItem[] }) {
-  return (
-    <div className="relative">
-      {/* Timeline line */}
-      <div className="absolute top-6 left-0 right-0 h-px bg-border" />
+function StickyNote({ item, index, isEditing, isDragging, onPointerDown, onEdit, onUpdate, onDelete, boardWidth, boardHeight }: StickyNoteProps) {
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-      <div className="flex gap-4 overflow-x-auto pb-4 pt-2">
-        {items.map((item, i) => (
-          <motion.div
-            key={i}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            className="flex flex-col items-center shrink-0"
-            style={{ minWidth: 140 }}
-          >
-            {/* Dot on timeline */}
-            <div className="w-3 h-3 rounded-full bg-accent border-2 border-background z-10 mb-3" />
-            {/* Card */}
-            <div
-              className={`rounded-xl p-3 text-xs leading-relaxed shadow-sm border border-border/30 max-w-[160px] text-center ${
-                i % 2 === 0 ? "" : "mt-8"
-              }`}
-              style={{ backgroundColor: item.color || "hsl(var(--secondary))" }}
-            >
+  useEffect(() => {
+    if (isEditing && textareaRef.current) {
+      textareaRef.current.focus();
+      textareaRef.current.select();
+    }
+  }, [isEditing]);
+
+  const left = (item.x / 1200) * 100;
+  const top = (item.y / 600) * 100;
+
+  const isCentral = item.type === "central";
+  const isBranch = item.type === "branch";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, scale: 0.8 }}
+      animate={{
+        opacity: 1,
+        scale: isDragging ? 1.05 : 1,
+        zIndex: isDragging ? 50 : isEditing ? 40 : 10,
+      }}
+      transition={{ delay: index * 0.04, duration: 0.2 }}
+      className={`absolute group ${isDragging ? "cursor-grabbing" : "cursor-grab"}`}
+      style={{
+        left: `${left}%`,
+        top: `${top}%`,
+        transform: "translate(-50%, -50%)",
+      }}
+      onPointerDown={onPointerDown}
+      onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}
+    >
+      <div
+        className={`relative rounded-xl shadow-sm border transition-shadow ${
+          isEditing ? "ring-2 ring-accent/40 shadow-md" : "hover:shadow-md"
+        } ${isCentral ? "border-primary/20" : "border-border/30"}`}
+        style={{
+          backgroundColor: item.color || "#FFF9DB",
+          minWidth: isCentral ? 140 : 120,
+          maxWidth: 180,
+        }}
+      >
+        {/* Fold effect */}
+        <div className="absolute top-0 right-0 w-4 h-4 overflow-hidden">
+          <div
+            className="absolute top-0 right-0 w-6 h-6 -translate-x-1 translate-y-1 rotate-45"
+            style={{ backgroundColor: "rgba(0,0,0,0.04)" }}
+          />
+        </div>
+
+        {/* Drag handle */}
+        <div className="absolute -left-0.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 transition-opacity">
+          <GripVertical className="w-3 h-3 text-foreground" />
+        </div>
+
+        {/* Content */}
+        <div className="p-3">
+          {isEditing ? (
+            <textarea
+              ref={textareaRef}
+              value={item.content}
+              onChange={(e) => onUpdate({ content: e.target.value })}
+              onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full bg-transparent border-none outline-none resize-none text-xs leading-relaxed min-h-[40px]"
+              rows={3}
+            />
+          ) : (
+            <p className={`text-xs leading-relaxed ${isCentral ? "font-medium text-center" : ""}`}>
               {item.content}
-            </div>
-          </motion.div>
-        ))}
+            </p>
+          )}
+        </div>
+
+        {/* Delete button on hover */}
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+        >
+          <Trash2 className="w-2.5 h-2.5" />
+        </button>
       </div>
-    </div>
+    </motion.div>
   );
 }
