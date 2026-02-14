@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame } from "lucide-react";
+import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame, Upload, Edit3 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Slider } from "./ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -17,6 +17,7 @@ const ELEMENT_TYPES = [
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
 const STORAGE_KEY = "ethos-preview-sessions";
+const SCAN_STORAGE_KEY = "ethos-scan-history";
 
 interface LayoutItem {
   content: string;
@@ -46,6 +47,16 @@ interface PreviewSession {
   gridDensity?: number;
 }
 
+interface ScanEntry {
+  id: string;
+  preview: string;
+  result: any;
+  mode: string;
+  date: string;
+  fileName?: string;
+  fileType?: string;
+}
+
 interface PreviewProps {
   onPushToMiro?: (items: LayoutItem[]) => void;
   importedPalette?: Record<string, string> | null;
@@ -54,6 +65,10 @@ interface PreviewProps {
 
 function loadSessions(): PreviewSession[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
+}
+
+function loadScanHistory(): ScanEntry[] {
+  try { return JSON.parse(localStorage.getItem(SCAN_STORAGE_KEY) || "[]"); } catch { return []; }
 }
 
 const STICKY_COLORS = [
@@ -78,7 +93,7 @@ type Phase = "input" | "questions" | "generating" | "board";
 
 // Organize items into a clean grid layout based on density
 function organizeGrid(items: LayoutItem[], density: number, canvasW: number): LayoutItem[] {
-  const cols = density + 1; // 2-6 columns
+  const cols = density + 1;
   const spacingX = Math.floor(canvasW / (cols + 0.5));
   const spacingY = 180;
   const startX = 40;
@@ -90,32 +105,22 @@ function organizeGrid(items: LayoutItem[], density: number, canvasW: number): La
   }));
 }
 
-// Organize items into a radial mindmap
 function organizeMindmap(items: LayoutItem[], canvasW: number, canvasH: number): LayoutItem[] {
   if (items.length === 0) return items;
   const cx = canvasW / 2 - 60;
   const cy = canvasH / 2 - 30;
   const result = [...items];
-  // Central node
   result[0] = { ...result[0], x: cx, y: cy, type: "central", connectedTo: [] };
-  // Branches radiate out
   const branches = result.slice(1);
   const angleStep = (2 * Math.PI) / Math.max(branches.length, 1);
   const radius = Math.min(canvasW, canvasH) * 0.3;
   branches.forEach((item, i) => {
     const angle = angleStep * i - Math.PI / 2;
-    result[i + 1] = {
-      ...item,
-      x: cx + Math.cos(angle) * radius,
-      y: cy + Math.sin(angle) * radius,
-      type: "branch",
-      connectedTo: [0],
-    };
+    result[i + 1] = { ...item, x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius, type: "branch", connectedTo: [0] };
   });
   return result;
 }
 
-// Organize items into a timeline
 function organizeTimeline(items: LayoutItem[], canvasW: number): LayoutItem[] {
   const spacing = Math.max(250, canvasW / (items.length + 1));
   return items.map((item, i) => ({
@@ -138,7 +143,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const [showSessions, setShowSessions] = useState(false);
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
-  const [gridDensity, setGridDensity] = useState(3); // 1-5 (sparse to dense)
+  const [gridDensity, setGridDensity] = useState(3);
   const [connectMode, setConnectMode] = useState(false);
   const [connectFrom, setConnectFrom] = useState<number | null>(null);
   const [showConvert, setShowConvert] = useState(false);
@@ -148,8 +153,14 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const [zoom, setZoom] = useState(100);
   const [canvasSize, setCanvasSize] = useState({ w: 1400, h: 800 });
 
-  // Board color theme
+  // Board color theme — editable palette
   const [activeTheme, setActiveTheme] = useState<string>("Warm Pastels");
+  const [customPalette, setCustomPalette] = useState<string[] | null>(null);
+  const [editingColorIdx, setEditingColorIdx] = useState<number | null>(null);
+
+  // Scan history for importing
+  const [scanHistory, setScanHistory] = useState<ScanEntry[]>(loadScanHistory);
+  const [showScanImport, setShowScanImport] = useState(false);
 
   // Follow-up questions flow
   const [phase, setPhase] = useState<Phase>("input");
@@ -166,18 +177,23 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
+  // Refresh scan history when tab focuses
+  useEffect(() => {
+    const refresh = () => setScanHistory(loadScanHistory());
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, []);
+
   // Persist sessions
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions.slice(0, 20)));
   }, [sessions]);
 
-  // Autosave: debounce 3s after any items change when in board phase
+  // Autosave
   useEffect(() => {
     if (phase !== "board" || items.length === 0) return;
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
-    autosaveTimerRef.current = setTimeout(() => {
-      doAutoSave();
-    }, 3000);
+    autosaveTimerRef.current = setTimeout(() => { doAutoSave(); }, 3000);
     return () => { if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current); };
   }, [items, phase]);
 
@@ -185,21 +201,12 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     const name = input.slice(0, 40) || "Untitled";
     const session: PreviewSession = {
       id: activeSessionId || Date.now().toString(),
-      name,
-      input,
-      items,
-      layoutType,
-      followUps,
-      gridDensity,
+      name, input, items, layoutType, followUps, gridDensity,
       date: new Date().toISOString(),
     };
     setSessions(prev => {
       const existing = prev.findIndex(s => s.id === session.id);
-      if (existing >= 0) {
-        const copy = [...prev];
-        copy[existing] = session;
-        return copy;
-      }
+      if (existing >= 0) { const copy = [...prev]; copy[existing] = session; return copy; }
       return [session, ...prev];
     });
     if (!activeSessionId) setActiveSessionId(session.id);
@@ -211,15 +218,20 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const expandCanvas = () => setCanvasSize(s => ({ w: s.w + 400, h: s.h + 200 }));
   const shrinkCanvas = () => setCanvasSize(s => ({ w: Math.max(800, s.w - 400), h: Math.max(500, s.h - 200) }));
 
+  // Get active palette colors
+  const getActivePalette = useCallback((): string[] => {
+    if (customPalette) return customPalette;
+    if (activeTheme === "Scanned Palette" && importedPalette) return Object.values(importedPalette);
+    const theme = BOARD_THEMES.find(t => t.name === activeTheme);
+    return theme ? theme.colors : STICKY_COLORS.map(c => c.hex);
+  }, [customPalette, activeTheme, importedPalette]);
+
   // Import ideas from Ideation tab
   const importIdeas = () => {
     if (!importedIdeas || importedIdeas.length === 0) return;
-    const palette = importedPalette ? Object.values(importedPalette) : STICKY_COLORS.map(c => c.hex);
+    const palette = getActivePalette();
     const newItems: LayoutItem[] = importedIdeas.map((idea, i) => ({
-      content: idea,
-      x: 0, y: 0,
-      type: "sticky_note",
-      color: palette[i % palette.length],
+      content: idea, x: 0, y: 0, type: "sticky_note", color: palette[i % palette.length],
     }));
     const organized = organizeGrid(newItems, gridDensity, canvasSize.w);
     setItems(prev => [...prev, ...organized]);
@@ -227,57 +239,90 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     toast.success(`Imported ${importedIdeas.length} ideas`);
   };
 
+  // Import scan entry content into board
+  const importScanEntry = (entry: ScanEntry) => {
+    const palette = getActivePalette();
+    const newItems: LayoutItem[] = [];
+
+    // Extract content from scan result
+    const r = entry.result;
+    if (r.title) newItems.push({ content: r.title, x: 0, y: 0, type: "central", elementType: "text_block", color: "transparent" });
+    if (r.insights) r.insights.forEach((ins: string) => newItems.push({ content: ins, x: 0, y: 0, type: "sticky_note", color: palette[newItems.length % palette.length] }));
+    if (r.tags) r.tags.forEach((tag: string) => newItems.push({ content: tag, x: 0, y: 0, type: "sticky_note", color: palette[newItems.length % palette.length] }));
+    if (r.suggestions) r.suggestions.forEach((s: string) => newItems.push({ content: s, x: 0, y: 0, type: "sticky_note", color: palette[newItems.length % palette.length] }));
+    if (r.description && newItems.length < 2) newItems.push({ content: r.description, x: 0, y: 0, type: "sticky_note", color: palette[0] });
+
+    if (newItems.length === 0) { toast.error("No content to import"); return; }
+
+    const organized = layoutType === "mindmap"
+      ? organizeMindmap(newItems, canvasSize.w, canvasSize.h)
+      : organizeGrid(newItems, gridDensity, canvasSize.w);
+    setItems(prev => [...prev, ...organized]);
+    if (phase !== "board") setPhase("board");
+    setShowScanImport(false);
+
+    // If scan has a palette, offer to apply it
+    if (r.palette) {
+      const colors = Object.values(r.palette) as string[];
+      setCustomPalette(colors);
+      setActiveTheme("Custom");
+    }
+
+    toast.success(`Imported "${entry.result.title || entry.fileName || "scan"}" to board`);
+  };
+
   // Apply a color theme to all items
   const applyTheme = useCallback((colors: string[], themeName: string) => {
     setActiveTheme(themeName);
+    setCustomPalette(null);
     if (items.length === 0) return;
-    setItems(prev => prev.map((item, i) => ({
-      ...item,
-      color: colors[i % colors.length],
-    })));
+    setItems(prev => prev.map((item, i) => ({ ...item, color: item.elementType === "frame" || item.elementType === "text_block" ? "transparent" : colors[i % colors.length] })));
     toast.success(`Applied "${themeName}" theme`);
   }, [items]);
 
-  // Import palette from scan as board theme
   const applyScannedPalette = useCallback(() => {
     if (!importedPalette) return;
     const colors = Object.values(importedPalette);
+    setCustomPalette(colors);
     applyTheme(colors, "Scanned Palette");
   }, [importedPalette, applyTheme]);
 
-  // Import palette colors as note labels
+  const applyCustomPalette = (colors: string[]) => {
+    setCustomPalette(colors);
+    setActiveTheme("Custom");
+    if (items.length === 0) return;
+    setItems(prev => prev.map((item, i) => ({ ...item, color: item.elementType === "frame" || item.elementType === "text_block" ? "transparent" : colors[i % colors.length] })));
+  };
+
+  const updateCustomColor = (idx: number, hex: string) => {
+    const palette = customPalette ? [...customPalette] : getActivePalette();
+    palette[idx] = hex;
+    setCustomPalette(palette);
+  };
+
   const importPalette = () => {
     if (!importedPalette) return;
     toast.success("Palette applied to board generation");
   };
 
-  // Re-organize current board
   const reorganize = useCallback(() => {
     if (items.length === 0) return;
     let organized: LayoutItem[];
-    if (layoutType === "mindmap") {
-      organized = organizeMindmap(items, canvasSize.w, canvasSize.h);
-    } else if (layoutType === "timeline") {
-      organized = organizeTimeline(items, canvasSize.w);
-    } else {
-      organized = organizeGrid(items, gridDensity, canvasSize.w);
-    }
+    if (layoutType === "mindmap") organized = organizeMindmap(items, canvasSize.w, canvasSize.h);
+    else if (layoutType === "timeline") organized = organizeTimeline(items, canvasSize.w);
+    else organized = organizeGrid(items, gridDensity, canvasSize.w);
     setItems(organized);
   }, [items, layoutType, gridDensity, canvasSize]);
 
-  // Handle connector creation
   const handleConnectClick = (idx: number) => {
     if (!connectMode) return;
-    if (connectFrom === null) {
-      setConnectFrom(idx);
-    } else {
+    if (connectFrom === null) { setConnectFrom(idx); }
+    else {
       if (connectFrom !== idx) {
         setItems(prev => prev.map((item, i) => {
           if (i === connectFrom) {
             const existing = item.connectedTo || [];
-            if (!existing.includes(idx)) {
-              return { ...item, connectedTo: [...existing, idx] };
-            }
+            if (!existing.includes(idx)) return { ...item, connectedTo: [...existing, idx] };
           }
           return item;
         }));
@@ -287,35 +332,23 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     }
   };
 
-  // Ask AI for follow-up questions before generating
   const askFollowUps = useCallback(async () => {
     if (!input.trim()) return;
     setLoadingQs(true);
     setPhase("questions");
 
-    const scanContext = importedPalette
-      ? `\n\nThe user has also scanned a moodboard with these extracted colors: ${JSON.stringify(importedPalette)}. Consider these aesthetics.`
-      : "";
-    const ideaContext = importedIdeas && importedIdeas.length > 0
-      ? `\n\nThe user has these ideas from a previous chat: ${importedIdeas.join(", ")}. Consider these.`
-      : "";
+    const scanContext = importedPalette ? `\n\nThe user has also scanned a moodboard with these extracted colors: ${JSON.stringify(importedPalette)}. Consider these aesthetics.` : "";
+    const ideaContext = importedIdeas && importedIdeas.length > 0 ? `\n\nThe user has these ideas from a previous chat: ${importedIdeas.join(", ")}. Consider these.` : "";
 
     try {
       const resp = await fetch(CHAT_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
         body: JSON.stringify({
-          messages: [{
-            role: "user",
-            content: `The user wants to create a ${layoutType} board from this brain dump:\n\n"${input}"${scanContext}${ideaContext}\n\nAsk 3 short, specific follow-up questions to better understand their needs before generating the board. Questions should help clarify scope, priorities, audience, or context. Return ONLY a JSON array of strings like: ["Question 1?", "Question 2?", "Question 3?"]`
-          }],
+          messages: [{ role: "user", content: `The user wants to create a ${layoutType} board from this brain dump:\n\n"${input}"${scanContext}${ideaContext}\n\nAsk 3 short, specific follow-up questions to better understand their needs before generating the board. Questions should help clarify scope, priorities, audience, or context. Return ONLY a JSON array of strings like: ["Question 1?", "Question 2?", "Question 3?"]` }],
           mode: "ideation",
         }),
       });
-
       if (!resp.ok || !resp.body) throw new Error("Failed");
       const full = await readStream(resp);
       const cleaned = full.replace(/```json/g, "").replace(/```/g, "").trim();
@@ -337,33 +370,23 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     updated[currentQ] = { ...updated[currentQ], answer: qAnswer };
     setFollowUps(updated);
     setQAnswer("");
-    if (currentQ < followUps.length - 1) {
-      setCurrentQ(currentQ + 1);
-    } else {
-      generate(input, updated);
-    }
+    if (currentQ < followUps.length - 1) setCurrentQ(currentQ + 1);
+    else generate(input, updated);
   };
 
   const skipQuestions = () => generate(input, followUps.filter(f => f.answer));
 
-  // AI tailor: modify existing board with prompt
   const tailorBoard = useCallback(async () => {
     if (!tailorPrompt.trim() || items.length === 0) return;
     setTailoring(true);
     try {
-      const paletteColors = importedPalette ? Object.values(importedPalette) : STICKY_COLORS.map(c => c.hex);
+      const paletteColors = getActivePalette();
       const currentBoard = JSON.stringify(items.map(i => ({ content: i.content, type: i.type, color: i.color })));
       const resp = await fetch(CHAT_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
         body: JSON.stringify({
-          messages: [{
-            role: "user",
-            content: `Here is the current board as JSON:\n${currentBoard}\n\nThe user wants to modify it: "${tailorPrompt}"\n\nAvailable colors: ${paletteColors.join(", ")}\n\nReturn the updated board as a JSON array. Each item: {"content": "text", "x": number, "y": number, "type": "sticky_note"|"central"|"branch"|"leaf"|"milestone"|"event", "color": "#hex", "connectedTo": [indices]}\nOrganize cleanly. Return ONLY the JSON array.`
-          }],
+          messages: [{ role: "user", content: `Here is the current board as JSON:\n${currentBoard}\n\nThe user wants to modify it: "${tailorPrompt}"\n\nAvailable colors: ${paletteColors.join(", ")}\n\nReturn the updated board as a JSON array. Each item: {"content": "text", "x": number, "y": number, "type": "sticky_note"|"central"|"branch"|"leaf"|"milestone"|"event", "color": "#hex", "connectedTo": [indices]}\nOrganize cleanly. Return ONLY the JSON array.` }],
           mode: "layout",
         }),
       });
@@ -371,18 +394,10 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
       const full = await readStream(resp);
       const cleaned = full.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleaned);
-      if (Array.isArray(parsed)) {
-        setItems(parsed);
-        toast.success("Board updated!");
-      }
-    } catch (e) {
-      console.error(e);
-      toast.error("Failed to tailor board");
-    } finally {
-      setTailoring(false);
-      setTailorPrompt("");
-    }
-  }, [tailorPrompt, items, importedPalette]);
+      if (Array.isArray(parsed)) { setItems(parsed); toast.success("Board updated!"); }
+    } catch (e) { console.error(e); toast.error("Failed to tailor board"); }
+    finally { setTailoring(false); setTailorPrompt(""); }
+  }, [tailorPrompt, items, getActivePalette]);
 
   const generate = useCallback(async (braindump: string, answers: FollowUpQ[]) => {
     setPhase("generating");
@@ -390,49 +405,28 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     setStatus("Crystallizing thoughts...");
 
     const context = answers.filter(a => a.answer).map(a => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n");
-    const paletteColors = importedPalette ? Object.values(importedPalette) : null;
+    const paletteColors = getActivePalette();
 
-    const scanContext = importedPalette
-      ? `\nThe user scanned a moodboard and extracted: ${JSON.stringify(importedPalette)}. Use these colors.`
-      : "";
-    const ideaContext = importedIdeas && importedIdeas.length > 0
-      ? `\nThe user also brainstormed these ideas in chat: ${importedIdeas.join("; ")}. Integrate relevant ones.`
-      : "";
+    const scanContext = importedPalette ? `\nThe user scanned a moodboard and extracted: ${JSON.stringify(importedPalette)}. Use these colors.` : "";
+    const ideaContext = importedIdeas && importedIdeas.length > 0 ? `\nThe user also brainstormed these ideas in chat: ${importedIdeas.join("; ")}. Integrate relevant ones.` : "";
 
     try {
-      const colorInstructions = paletteColors
-        ? `Use these extracted palette colors: ${paletteColors.join(", ")}`
-        : `Use soft warm pastels (#FFF9DB, #D4EDDA, #FDE8E8, #E3F2FD, #F3E5F5, #FFE8D6)`;
-
+      const colorInstructions = `Use these colors: ${paletteColors.join(", ")}`;
       const cols = gridDensity + 1;
       const spacingX = Math.floor(canvasSize.w / (cols + 0.5));
 
       const layoutPrompts: Record<string, string> = {
-        grid: `Organize into a clean ${cols}-column grid. Return ONLY a JSON array:
-{"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex", "connectedTo": [indices of related items]}
-Start x at 40, spacing ${spacingX}px horizontally, 180px vertically. ${colorInstructions}. Max 12 items. Group related ideas. Add connectedTo for related items.`,
-        mindmap: `Create a radial mindmap. Center node at x:${Math.floor(canvasSize.w / 2)}, y:${Math.floor(canvasSize.h / 2)}.
-Branches radiate outward at ~${Math.floor(Math.min(canvasSize.w, canvasSize.h) * 0.3)}px distance.
-Each: {"content": "text", "x": number, "y": number, "type": "central"|"branch"|"leaf", "color": "#hex", "connectedTo": [parent_index]}
-${colorInstructions}. Max 15 items. Every non-central node MUST have connectedTo pointing to its parent.`,
-        timeline: `Create a horizontal timeline. Items flow left to right, x starting at 60, increment by 250px.
-y alternates between 100 and 280.
-Each: {"content": "text", "x": number, "y": number, "type": "milestone"|"event", "color": "#hex", "connectedTo": [previous_index]}
-${colorInstructions}. Max 10 items. Each item connects to previous.`,
+        grid: `Organize into a clean ${cols}-column grid. Return ONLY a JSON array:\n{"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex", "connectedTo": [indices of related items]}\nStart x at 40, spacing ${spacingX}px horizontally, 180px vertically. ${colorInstructions}. Max 12 items.`,
+        mindmap: `Create a radial mindmap. Center node at x:${Math.floor(canvasSize.w / 2)}, y:${Math.floor(canvasSize.h / 2)}.\nBranches radiate outward at ~${Math.floor(Math.min(canvasSize.w, canvasSize.h) * 0.3)}px distance.\nEach: {"content": "text", "x": number, "y": number, "type": "central"|"branch"|"leaf", "color": "#hex", "connectedTo": [parent_index]}\n${colorInstructions}. Max 15 items.`,
+        timeline: `Create a horizontal timeline. Items flow left to right, x starting at 60, increment by 250px.\ny alternates between 100 and 280.\nEach: {"content": "text", "x": number, "y": number, "type": "milestone"|"event", "color": "#hex", "connectedTo": [previous_index]}\n${colorInstructions}. Max 10 items.`,
       };
 
       const fullPrompt = `${layoutPrompts[layoutType]}${scanContext}${ideaContext}\n\n${context ? `Additional context:\n${context}\n\n` : ""}Content to organize:\n${braindump}\n\nReturn ONLY a valid JSON array.`;
 
       const resp = await fetch(CHAT_URL, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
-        body: JSON.stringify({
-          messages: [{ role: "user", content: fullPrompt }],
-          mode: "layout",
-        }),
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
+        body: JSON.stringify({ messages: [{ role: "user", content: fullPrompt }], mode: "layout" }),
       });
 
       if (!resp.ok || !resp.body) throw new Error("Failed");
@@ -447,15 +441,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
       console.error(e);
       setStatus("Generation failed. Try again.");
       setPhase("input");
-    } finally {
-      setGenerating(false);
-    }
-  }, [layoutType, importedPalette, importedIdeas, gridDensity, canvasSize]);
+    } finally { setGenerating(false); }
+  }, [layoutType, importedPalette, importedIdeas, gridDensity, canvasSize, getActivePalette]);
 
-  const saveSession = () => {
-    doAutoSave();
-    toast.success("Board saved!");
-  };
+  const saveSession = () => { doAutoSave(); toast.success("Board saved!"); };
 
   const loadSession = (session: PreviewSession) => {
     setInput(session.input);
@@ -469,12 +458,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
   };
 
   const newSession = () => {
-    setInput("");
-    setItems([]);
-    setFollowUps([]);
-    setActiveSessionId(null);
-    setPhase("input");
-    setShowSessions(false);
+    setInput(""); setItems([]); setFollowUps([]); setActiveSessionId(null); setPhase("input"); setShowSessions(false);
   };
 
   const deleteSession = (id: string) => {
@@ -485,7 +469,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
 
   const addElement = (elType?: LayoutItem["elementType"]) => {
     const type = elType || addElementType || "sticky_note";
-    const palette = importedPalette ? Object.values(importedPalette) : STICKY_COLORS.map(c => c.hex);
+    const palette = getActivePalette();
     const defaults: Record<string, Partial<LayoutItem>> = {
       sticky_note: { content: "New note", width: 140, height: 100 },
       shape_rect: { content: "Process", width: 160, height: 80 },
@@ -497,13 +481,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
     const def = defaults[type] || defaults.sticky_note;
     const newItem: LayoutItem = {
       content: def.content || "New",
-      x: 50 + Math.random() * 400,
-      y: 50 + Math.random() * 300,
-      type: type,
-      elementType: type as LayoutItem["elementType"],
-      color: type === "frame" ? "transparent" : type === "text_block" ? "transparent" : palette[Math.floor(Math.random() * palette.length)],
-      width: def.width,
-      height: def.height,
+      x: 50 + Math.random() * 400, y: 50 + Math.random() * 300,
+      type: type, elementType: type as LayoutItem["elementType"],
+      color: type === "frame" || type === "text_block" ? "transparent" : palette[Math.floor(Math.random() * palette.length)],
+      width: def.width, height: def.height,
     };
     setItems(prev => [...prev, newItem]);
   };
@@ -513,10 +494,8 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
   };
 
   const deleteItem = (idx: number) => {
-    // Remove references in connectedTo
     setItems(prev => prev.filter((_, i) => i !== idx).map(item => ({
-      ...item,
-      connectedTo: item.connectedTo?.filter(c => c !== idx).map(c => c > idx ? c - 1 : c),
+      ...item, connectedTo: item.connectedTo?.filter(c => c !== idx).map(c => c > idx ? c - 1 : c),
     })));
     setEditingIdx(null);
   };
@@ -529,6 +508,8 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
 
   const densityLabel = gridDensity <= 1 ? "2×2" : gridDensity === 2 ? "3×3" : gridDensity === 3 ? "4×4" : gridDensity === 4 ? "5×5" : "6×6";
 
+  const currentPalette = customPalette || getActivePalette();
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* Left sidebar */}
@@ -536,12 +517,12 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
         {/* Sessions */}
         <div className="p-4 border-b border-border/20">
           <div className="flex items-center justify-between mb-2">
-            <button onClick={() => setShowSessions(!showSessions)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+            <button onClick={() => setShowSessions(!showSessions)} className="flex items-center gap-1.5 text-xs text-foreground/70 hover:text-foreground transition-colors">
               <FolderOpen className="w-3 h-3" />
-              Saved Boards
-              {sessions.length > 0 && <span className="text-[10px] bg-secondary rounded-full px-1.5">{sessions.length}</span>}
+              <span className="font-medium">Saved Boards</span>
+              {sessions.length > 0 && <span className="text-[10px] bg-secondary rounded-full px-1.5 text-foreground/60">{sessions.length}</span>}
             </button>
-            <button onClick={newSession} className="text-xs text-accent hover:text-accent/80 transition-colors">+ New</button>
+            <button onClick={newSession} className="text-xs text-accent font-medium hover:text-accent/80 transition-colors">+ New</button>
           </div>
           <AnimatePresence>
             {showSessions && sessions.length > 0 && (
@@ -552,10 +533,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                       activeSessionId === s.id ? "bg-accent/10 text-accent" : "bg-secondary/50 hover:bg-secondary text-foreground"
                     }`}>
                       <button onClick={() => loadSession(s)} className="flex-1 text-left min-w-0">
-                        <span className="truncate block">{s.name}</span>
-                        <span className="text-[10px] text-muted-foreground/60 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
+                        <span className="truncate block font-medium">{s.name}</span>
+                        <span className="text-[10px] text-foreground/50 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
                       </button>
-                      <button onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-destructive transition-all shrink-0">
+                      <button onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100 text-foreground/30 hover:text-destructive transition-all shrink-0">
                         <Trash2 className="w-3 h-3" />
                       </button>
                     </div>
@@ -569,21 +550,16 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
         <div className="p-4 space-y-5">
           {/* Layout DNA */}
           <div>
-            <h4 className="text-serif text-sm mb-3">Layout DNA</h4>
+            <h4 className="text-serif text-sm mb-3 text-foreground">Layout DNA</h4>
             <div className="flex gap-2">
               {layoutOptions.map(({ value, label, desc, icon: Icon }) => (
-                <button
-                  key={value}
-                  onClick={() => setLayoutType(value)}
+                <button key={value} onClick={() => setLayoutType(value)}
                   className={`flex-1 flex flex-col items-center gap-1.5 p-3 rounded-xl text-xs transition-all ${
-                    layoutType === value
-                      ? "bg-accent/10 text-accent border border-accent/20"
-                      : "bg-secondary/50 text-secondary-foreground hover:bg-secondary border border-transparent"
-                  }`}
-                >
+                    layoutType === value ? "bg-accent/10 text-accent border border-accent/20" : "bg-secondary/50 text-foreground/70 hover:bg-secondary border border-transparent"
+                  }`}>
                   <Icon className="w-5 h-5" />
                   <span className="font-medium">{label}</span>
-                  <span className="text-[9px] text-muted-foreground leading-tight text-center">{desc}</span>
+                  <span className="text-[9px] text-foreground/40 leading-tight text-center">{desc}</span>
                 </button>
               ))}
             </div>
@@ -592,66 +568,111 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
           {/* Grid Density */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-serif text-sm">Grid Density</h4>
-              <span className="text-xs text-muted-foreground font-mono">{densityLabel}</span>
+              <h4 className="text-serif text-sm text-foreground">Grid Density</h4>
+              <span className="text-xs text-foreground/60 font-mono">{densityLabel}</span>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-[10px] text-muted-foreground">Sparse</span>
-              <Slider
-                value={[gridDensity]}
-                onValueChange={(v) => setGridDensity(v[0])}
-                min={1}
-                max={5}
-                step={1}
-                className="flex-1"
-              />
-              <span className="text-[10px] text-muted-foreground">Dense</span>
+              <span className="text-[10px] text-foreground/50">Sparse</span>
+              <Slider value={[gridDensity]} onValueChange={(v) => setGridDensity(v[0])} min={1} max={5} step={1} className="flex-1" />
+              <span className="text-[10px] text-foreground/50">Dense</span>
             </div>
             {phase === "board" && items.length > 0 && (
-              <button
-                onClick={reorganize}
-                className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors"
-              >
+              <button onClick={reorganize} className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
                 <Sliders className="w-3 h-3 text-accent" />
                 Reorganize Board
               </button>
             )}
           </div>
 
-          {/* Extracted Color Palette */}
-          {importedPalette && (
-            <div>
-              <div className="flex items-center justify-between mb-2">
-                <h4 className="text-serif text-sm">Extracted Palette</h4>
-                <button onClick={importPalette} className="text-[10px] text-accent hover:underline">Apply</button>
-              </div>
-              <div className="grid grid-cols-3 gap-2">
-                {Object.entries(importedPalette).map(([name, hex]) => (
-                  <div key={name} className="text-center">
-                    <div className="w-full aspect-square rounded-lg border border-border/50 mb-1" style={{ backgroundColor: hex }} />
-                    <p className="text-[10px] text-muted-foreground capitalize truncate">{name}</p>
-                    <p className="text-[9px] font-mono text-muted-foreground/50">{hex}</p>
-                  </div>
-                ))}
-              </div>
+          {/* Active Palette — Editable */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-serif text-sm text-foreground">Palette</h4>
+              {customPalette && (
+                <button onClick={() => { setCustomPalette(null); setEditingColorIdx(null); }} className="text-[10px] text-foreground/50 hover:text-foreground transition-colors">Reset</button>
+              )}
             </div>
-          )}
+            <div className="grid grid-cols-6 gap-1.5 mb-2">
+              {currentPalette.slice(0, 6).map((hex, i) => (
+                <div key={i} className="relative group/color">
+                  <div
+                    className={`w-full aspect-square rounded-lg border cursor-pointer hover:scale-110 transition-transform ${editingColorIdx === i ? "ring-2 ring-accent border-accent/30" : "border-border/50"}`}
+                    style={{ backgroundColor: hex }}
+                    onClick={() => setEditingColorIdx(editingColorIdx === i ? null : i)}
+                  />
+                  {editingColorIdx === i && (
+                    <div className="absolute top-full left-0 z-50 mt-1">
+                      <input
+                        type="color"
+                        value={hex}
+                        onChange={(e) => updateCustomColor(i, e.target.value)}
+                        className="w-8 h-6 border-none cursor-pointer rounded"
+                        autoFocus
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            {items.length > 0 && customPalette && (
+              <button onClick={() => applyCustomPalette(customPalette)} className="w-full text-[10px] text-accent hover:underline">
+                Apply edited palette to board
+              </button>
+            )}
+          </div>
+
+          {/* Import from Scan */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-serif text-sm text-foreground">Import from Scan</h4>
+              <button onClick={() => { setScanHistory(loadScanHistory()); setShowScanImport(!showScanImport); }} className="text-[10px] text-accent font-medium hover:underline">
+                {showScanImport ? "Hide" : `Show (${scanHistory.length})`}
+              </button>
+            </div>
+            <AnimatePresence>
+              {showScanImport && (
+                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                  {scanHistory.length === 0 ? (
+                    <p className="text-[11px] text-foreground/40 py-2">No scans yet. Go to Scan tab to analyze files.</p>
+                  ) : (
+                    <div className="space-y-1 max-h-[200px] overflow-y-auto scrollbar-thin">
+                      {scanHistory.slice(0, 10).map(entry => (
+                        <button
+                          key={entry.id}
+                          onClick={() => importScanEntry(entry)}
+                          className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors text-left"
+                        >
+                          <Upload className="w-3 h-3 text-accent shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <span className="text-xs font-medium text-foreground truncate block">
+                              {entry.result?.title || entry.result?.mood || entry.fileName || "Scan"}
+                            </span>
+                            <span className="text-[10px] text-foreground/40">{new Date(entry.date).toLocaleDateString()}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
 
           {/* Import buttons */}
           {((importedIdeas && importedIdeas.length > 0) || importedPalette) && (
             <div>
-              <h4 className="text-serif text-sm mb-2">Import Data</h4>
+              <h4 className="text-serif text-sm mb-2 text-foreground">Import Data</h4>
               {importedIdeas && importedIdeas.length > 0 && (
-                <button
-                  onClick={importIdeas}
-                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors mb-1.5"
-                >
+                <button onClick={importIdeas} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors mb-1.5">
                   <Import className="w-3 h-3 text-accent" />
                   Import {importedIdeas.length} ideas from chat
                 </button>
               )}
               {importedPalette && (
-                <p className="text-[10px] text-muted-foreground">Scanned palette colors will be used when generating boards.</p>
+                <button onClick={applyScannedPalette} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
+                  <Palette className="w-3 h-3 text-accent" />
+                  Apply scanned palette
+                </button>
               )}
             </div>
           )}
@@ -675,19 +696,15 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                     </button>
                   </PopoverTrigger>
                   <PopoverContent className="w-48 p-2" align="start">
-                    <p className="text-[10px] font-medium text-muted-foreground mb-1.5 px-2">Elements</p>
+                    <p className="text-[10px] font-medium text-foreground/60 mb-1.5 px-2">Elements</p>
                     {ELEMENT_TYPES.map(el => {
                       const Icon = el.icon;
                       return (
-                        <button
-                          key={el.id}
-                          onClick={() => addElement(el.id)}
-                          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs hover:bg-secondary transition-colors"
-                        >
+                        <button key={el.id} onClick={() => addElement(el.id)} className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs hover:bg-secondary transition-colors">
                           <Icon className="w-3.5 h-3.5 text-accent" />
                           <div>
                             <span className="font-medium text-foreground">{el.label}</span>
-                            <span className="text-[9px] text-muted-foreground ml-1.5">{el.desc}</span>
+                            <span className="text-[9px] text-foreground/50 ml-1.5">{el.desc}</span>
                           </div>
                         </button>
                       );
@@ -695,12 +712,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   </PopoverContent>
                 </Popover>
 
-                <button
-                  onClick={() => { setConnectMode(!connectMode); setConnectFrom(null); }}
+                <button onClick={() => { setConnectMode(!connectMode); setConnectFrom(null); }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${
-                    connectMode ? "bg-accent text-accent-foreground" : "bg-secondary text-secondary-foreground hover:bg-secondary/80"
-                  }`}
-                >
+                    connectMode ? "bg-accent text-accent-foreground" : "bg-secondary text-foreground/70 hover:bg-secondary/80"
+                  }`}>
                   <Link2 className="w-3 h-3" />
                   Connect
                 </button>
@@ -708,7 +723,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                 {/* Board Color Theme Picker */}
                 <Popover>
                   <PopoverTrigger asChild>
-                    <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs hover:bg-secondary/80 transition-colors">
+                    <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-foreground/70 text-xs hover:bg-secondary/80 transition-colors">
                       <Palette className="w-3 h-3" />
                       Colors
                       <ChevronDown className="w-3 h-3" />
@@ -718,13 +733,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                     <p className="text-xs font-medium text-foreground mb-2">Board Theme</p>
                     <div className="space-y-1.5 max-h-52 overflow-y-auto scrollbar-thin">
                       {BOARD_THEMES.map(theme => (
-                        <button
-                          key={theme.name}
-                          onClick={() => applyTheme(theme.colors, theme.name)}
+                        <button key={theme.name} onClick={() => applyTheme(theme.colors, theme.name)}
                           className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition-colors ${
-                            activeTheme === theme.name ? "bg-accent/10 text-accent" : "hover:bg-secondary"
-                          }`}
-                        >
+                            activeTheme === theme.name && !customPalette ? "bg-accent/10 text-accent" : "hover:bg-secondary text-foreground"
+                          }`}>
                           <div className="flex gap-0.5 shrink-0">
                             {theme.colors.slice(0, 4).map((c, i) => (
                               <div key={i} className="w-3.5 h-3.5 rounded-sm border border-border/40" style={{ backgroundColor: c }} />
@@ -736,12 +748,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                       {importedPalette && (
                         <>
                           <div className="h-px bg-border/50 my-1.5" />
-                          <button
-                            onClick={applyScannedPalette}
+                          <button onClick={applyScannedPalette}
                             className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs transition-colors ${
-                              activeTheme === "Scanned Palette" ? "bg-accent/10 text-accent" : "hover:bg-secondary"
-                            }`}
-                          >
+                              activeTheme === "Scanned Palette" ? "bg-accent/10 text-accent" : "hover:bg-secondary text-foreground"
+                            }`}>
                             <div className="flex gap-0.5 shrink-0">
                               {Object.values(importedPalette).slice(0, 4).map((c, i) => (
                                 <div key={i} className="w-3.5 h-3.5 rounded-sm border border-border/40" style={{ backgroundColor: c }} />
@@ -753,16 +763,12 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                       )}
                     </div>
                     <div className="mt-2 pt-2 border-t border-border/30">
-                      <p className="text-[10px] text-muted-foreground mb-1.5">Per-note color</p>
+                      <p className="text-[10px] text-foreground/60 mb-1.5">Per-note color</p>
                       <div className="flex gap-1.5 flex-wrap">
                         {STICKY_COLORS.map(c => (
-                          <button
-                            key={c.hex}
-                            onClick={() => { if (editingIdx !== null) updateItem(editingIdx, { color: c.hex }); }}
+                          <button key={c.hex} onClick={() => { if (editingIdx !== null) updateItem(editingIdx, { color: c.hex }); }}
                             className="w-5 h-5 rounded-full border border-border/50 hover:scale-125 transition-transform"
-                            style={{ backgroundColor: c.hex }}
-                            title={`${c.name} (select a note first)`}
-                          />
+                            style={{ backgroundColor: c.hex }} title={`${c.name} (select a note first)`} />
                         ))}
                       </div>
                     </div>
@@ -770,10 +776,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                 </Popover>
 
                 {/* Convert button */}
-                <button
-                  onClick={() => setShowConvert(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs hover:bg-secondary/80 transition-colors"
-                >
+                <button onClick={() => setShowConvert(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 transition-colors">
                   <FileOutput className="w-3 h-3" />
                   Convert
                 </button>
@@ -782,22 +785,22 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
           </div>
           <div className="flex items-center gap-1.5">
             {lastSaved && (
-              <span className="text-[10px] text-muted-foreground mr-2 hidden sm:inline">
+              <span className="text-[10px] text-foreground/50 mr-2 hidden sm:inline">
                 Saved {lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             )}
             <button onClick={zoomOut} className="w-7 h-7 rounded-lg bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors">
-              <ZoomOut className="w-3.5 h-3.5 text-muted-foreground" />
+              <ZoomOut className="w-3.5 h-3.5 text-foreground/50" />
             </button>
-            <span className="text-xs text-muted-foreground font-mono w-10 text-center">{zoom}%</span>
+            <span className="text-xs text-foreground/60 font-mono w-10 text-center">{zoom}%</span>
             <button onClick={zoomIn} className="w-7 h-7 rounded-lg bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors">
-              <ZoomIn className="w-3.5 h-3.5 text-muted-foreground" />
+              <ZoomIn className="w-3.5 h-3.5 text-foreground/50" />
             </button>
             <button onClick={expandCanvas} className="w-7 h-7 rounded-lg bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors ml-1" title="Expand canvas">
-              <Maximize2 className="w-3.5 h-3.5 text-muted-foreground" />
+              <Maximize2 className="w-3.5 h-3.5 text-foreground/50" />
             </button>
             <button onClick={shrinkCanvas} className="w-7 h-7 rounded-lg bg-secondary flex items-center justify-center hover:bg-secondary/80 transition-colors" title="Shrink canvas">
-              <Minimize2 className="w-3.5 h-3.5 text-muted-foreground" />
+              <Minimize2 className="w-3.5 h-3.5 text-foreground/50" />
             </button>
           </div>
         </div>
@@ -812,8 +815,8 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-4">
                     <Sparkles className="w-6 h-6 text-accent" />
                   </div>
-                  <h2 className="text-serif text-2xl mb-2">Create a board</h2>
-                  <p className="text-sm text-muted-foreground">Brain dump your ideas and AI will organize them into a visual layout</p>
+                  <h2 className="text-serif text-2xl mb-2 text-foreground">Create a board</h2>
+                  <p className="text-sm text-foreground/60">Brain dump your ideas and AI will organize them into a visual layout</p>
                   {(importedIdeas && importedIdeas.length > 0) && (
                     <p className="text-xs text-accent mt-2">✦ {importedIdeas.length} ideas from chat ready to integrate</p>
                   )}
@@ -822,17 +825,13 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   )}
                 </div>
                 <textarea
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  value={input} onChange={(e) => setInput(e.target.value)}
                   placeholder="Brain dump your ideas here... URLs, notes, anything."
                   rows={5}
-                  className="w-full bg-transparent border border-border rounded-xl p-4 text-sm outline-none focus:ring-1 focus:ring-accent/40 resize-none placeholder:text-muted-foreground/50"
+                  className="w-full bg-transparent border border-border rounded-xl p-4 text-sm text-foreground outline-none focus:ring-1 focus:ring-accent/40 resize-none placeholder:text-foreground/30"
                 />
-                <button
-                  onClick={askFollowUps}
-                  disabled={!input.trim() || loadingQs}
-                  className="w-full px-4 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-40"
-                >
+                <button onClick={askFollowUps} disabled={!input.trim() || loadingQs}
+                  className="w-full px-4 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-40">
                   {loadingQs ? (
                     <><Loader2 className="w-4 h-4 animate-spin" /><span className="animate-pulse-slow">Thinking...</span></>
                   ) : (
@@ -840,17 +839,32 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   )}
                 </button>
 
+                {/* Import from Scan shortcut */}
+                {scanHistory.length > 0 && (
+                  <div className="mt-4">
+                    <h5 className="text-serif text-sm text-foreground/70 mb-2">Import from Scan</h5>
+                    <div className="space-y-1">
+                      {scanHistory.slice(0, 3).map(entry => (
+                        <button key={entry.id} onClick={() => importScanEntry(entry)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors text-left text-xs">
+                          <Upload className="w-3 h-3 text-accent shrink-0" />
+                          <span className="text-foreground truncate">{entry.result?.title || entry.fileName || "Scan"}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {sessions.length > 0 && (
-                  <div className="mt-8">
-                    <h5 className="text-serif text-sm text-muted-foreground mb-3">Recent Boards</h5>
+                  <div className="mt-6">
+                    <h5 className="text-serif text-sm text-foreground/70 mb-3">Recent Boards</h5>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {sessions.slice(0, 6).map(s => (
                         <div key={s.id} className="flex items-center gap-1 p-3 rounded-xl bg-secondary/50 hover:bg-secondary transition-colors text-xs group">
                           <button onClick={() => loadSession(s)} className="flex-1 text-left min-w-0">
                             <span className="text-foreground truncate block font-medium">{s.name}</span>
-                            <span className="text-muted-foreground/60 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
+                            <span className="text-foreground/40 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
                           </button>
-                          <button onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-destructive transition-all shrink-0">
+                          <button onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100 text-foreground/30 hover:text-destructive transition-all shrink-0">
                             <Trash2 className="w-3 h-3" />
                           </button>
                         </div>
@@ -868,8 +882,8 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center mx-auto mb-3">
                     <MessageSquare className="w-5 h-5 text-accent" />
                   </div>
-                  <h3 className="text-serif text-xl mb-1">Quick questions</h3>
-                  <p className="text-xs text-muted-foreground">To personalize your board</p>
+                  <h3 className="text-serif text-xl mb-1 text-foreground">Quick questions</h3>
+                  <p className="text-xs text-foreground/50">To personalize your board</p>
                 </div>
 
                 <div className="flex justify-center gap-2">
@@ -882,22 +896,16 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
 
                 <div className="glass rounded-xl p-5">
                   <p className="text-sm text-foreground font-medium mb-3">{followUps[currentQ]?.question}</p>
-                  <textarea
-                    value={qAnswer}
-                    onChange={(e) => setQAnswer(e.target.value)}
-                    placeholder="Your answer..."
-                    rows={3}
-                    className="w-full bg-transparent border border-border rounded-lg p-3 text-sm outline-none focus:ring-1 focus:ring-accent/40 resize-none placeholder:text-muted-foreground/50"
+                  <textarea value={qAnswer} onChange={(e) => setQAnswer(e.target.value)}
+                    placeholder="Your answer..." rows={3}
+                    className="w-full bg-transparent border border-border rounded-lg p-3 text-sm text-foreground outline-none focus:ring-1 focus:ring-accent/40 resize-none placeholder:text-foreground/30"
                     onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); answerQuestion(); } }}
-                    autoFocus
-                  />
+                    autoFocus />
                   <div className="flex gap-2 mt-3">
                     <button onClick={answerQuestion} disabled={!qAnswer.trim()} className="flex-1 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium disabled:opacity-40">
                       {currentQ < followUps.length - 1 ? "Next" : "Generate Board"}
                     </button>
-                    <button onClick={skipQuestions} className="px-4 py-2.5 rounded-lg border border-border text-sm text-muted-foreground hover:bg-secondary transition-colors">
-                      Skip
-                    </button>
+                    <button onClick={skipQuestions} className="px-4 py-2.5 rounded-lg border border-border text-sm text-foreground/60 hover:bg-secondary transition-colors">Skip</button>
                   </div>
                 </div>
 
@@ -905,7 +913,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   <div className="space-y-2">
                     {followUps.slice(0, currentQ).filter(f => f.answer).map((f, i) => (
                       <div key={i} className="bg-secondary/50 rounded-lg px-3 py-2 text-xs">
-                        <p className="text-muted-foreground">{f.question}</p>
+                        <p className="text-foreground/50">{f.question}</p>
                         <p className="text-foreground mt-0.5">{f.answer}</p>
                       </div>
                     ))}
@@ -918,7 +926,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
             {(phase === "generating" || (phase === "questions" && loadingQs)) && (
               <motion.div key="generating" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex flex-col items-center justify-center h-full py-24">
                 <Loader2 className="w-10 h-10 animate-spin text-accent mb-4" />
-                <p className="text-sm text-muted-foreground animate-pulse-slow">{status || "Generating your board..."}</p>
+                <p className="text-sm text-foreground/60 animate-pulse-slow">{status || "Generating your board..."}</p>
               </motion.div>
             )}
 
@@ -927,64 +935,34 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
               <motion.div key="board" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="h-full flex flex-col gap-3 min-h-0">
                 <div className="flex-1 min-h-0 relative">
                 <InteractiveBoard
-                  items={items}
-                  layoutType={layoutType}
-                  editingIdx={editingIdx}
-                  onEditIdx={setEditingIdx}
-                  onUpdateItem={updateItem}
-                  onDeleteItem={deleteItem}
-                  dragIdx={dragIdx}
-                  onDragIdx={setDragIdx}
-                  zoom={zoom}
-                  onZoomChange={setZoom}
-                  canvasWidth={canvasSize.w}
-                  canvasHeight={canvasSize.h}
-                  connectMode={connectMode}
-                  connectFrom={connectFrom}
-                  onConnectClick={handleConnectClick}
+                  items={items} layoutType={layoutType} editingIdx={editingIdx} onEditIdx={setEditingIdx}
+                  onUpdateItem={updateItem} onDeleteItem={deleteItem} dragIdx={dragIdx} onDragIdx={setDragIdx}
+                  zoom={zoom} onZoomChange={setZoom} canvasWidth={canvasSize.w} canvasHeight={canvasSize.h}
+                  connectMode={connectMode} connectFrom={connectFrom} onConnectClick={handleConnectClick}
                 />
                 </div>
 
                 {/* Tailor with AI */}
                 <div className="glass rounded-xl p-3 flex gap-2 items-center shrink-0">
                   <Wand2 className="w-4 h-4 text-accent shrink-0" />
-                  <input
-                    value={tailorPrompt}
-                    onChange={(e) => setTailorPrompt(e.target.value)}
+                  <input value={tailorPrompt} onChange={(e) => setTailorPrompt(e.target.value)}
                     placeholder="Tailor this board... (e.g. 'add more detail to marketing', 'regroup by priority')"
-                    className="flex-1 bg-transparent border-none outline-none text-xs placeholder:text-muted-foreground/50"
-                    onKeyDown={(e) => { if (e.key === "Enter") tailorBoard(); }}
-                  />
-                  <button
-                    onClick={tailorBoard}
-                    disabled={!tailorPrompt.trim() || tailoring}
-                    className="px-3 py-1.5 rounded-lg bg-accent text-accent-foreground text-xs font-medium disabled:opacity-40 hover:opacity-90 transition-opacity shrink-0"
-                  >
+                    className="flex-1 bg-transparent border-none outline-none text-xs text-foreground placeholder:text-foreground/30"
+                    onKeyDown={(e) => { if (e.key === "Enter") tailorBoard(); }} />
+                  <button onClick={tailorBoard} disabled={!tailorPrompt.trim() || tailoring}
+                    className="px-3 py-1.5 rounded-lg bg-accent text-accent-foreground text-xs font-medium disabled:opacity-40 hover:opacity-90 transition-opacity shrink-0">
                     {tailoring ? <Loader2 className="w-3 h-3 animate-spin" /> : "Apply"}
                   </button>
                 </div>
 
                 {/* Actions */}
                 <div className="flex gap-2 flex-wrap shrink-0">
-                  <button
-                    onClick={() => onPushToMiro?.(items)}
-                    className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
-                  >
-                    Push to Miro
+                  <button onClick={() => onPushToMiro?.(items)} className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity">Push to Miro</button>
+                  <button onClick={saveSession} className="px-4 py-2.5 rounded-xl border border-accent/30 text-xs text-accent hover:bg-accent/5 transition-colors flex items-center gap-1.5">
+                    <Save className="w-3 h-3" />Save
                   </button>
-                  <button
-                    onClick={saveSession}
-                    className="px-4 py-2.5 rounded-xl border border-accent/30 text-xs text-accent hover:bg-accent/5 transition-colors flex items-center gap-1.5"
-                  >
-                    <Save className="w-3 h-3" />
-                    Save
-                  </button>
-                  <button
-                    onClick={() => setPhase("input")}
-                    className="px-4 py-2.5 rounded-xl border border-border text-xs text-muted-foreground hover:bg-secondary transition-colors flex items-center gap-1.5"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    New Board
+                  <button onClick={() => setPhase("input")} className="px-4 py-2.5 rounded-xl border border-border text-xs text-foreground/60 hover:bg-secondary transition-colors flex items-center gap-1.5">
+                    <RotateCcw className="w-3 h-3" />New Board
                   </button>
                 </div>
               </motion.div>
@@ -993,10 +971,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
         </div>
       </div>
 
-      {/* Right sidebar — Statistics */}
+      {/* Right sidebar */}
       <div className="hidden lg:flex w-64 xl:w-72 flex-col border-l border-border/30 p-4 gap-4 overflow-y-auto scrollbar-thin shrink-0">
         <div className="glass rounded-xl p-4">
-          <h4 className="text-serif text-sm mb-3">Preview Statistics</h4>
+          <h4 className="text-serif text-sm mb-3 text-foreground">Preview Statistics</h4>
           <div className="grid grid-cols-2 gap-2">
             {[
               { label: "Total Elements", value: items.length, icon: "✦" },
@@ -1006,11 +984,11 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
             ].map((s) => (
               <div key={s.label} className="bg-secondary/50 rounded-lg p-3 text-center">
                 <p className="text-lg font-medium text-foreground">{s.value}</p>
-                <p className="text-[10px] text-muted-foreground">{s.label}</p>
+                <p className="text-[10px] text-foreground/50">{s.label}</p>
               </div>
             ))}
           </div>
-          <div className="flex items-center justify-between text-xs text-muted-foreground mt-3 pt-3 border-t border-border/30">
+          <div className="flex items-center justify-between text-xs text-foreground/50 mt-3 pt-3 border-t border-border/30">
             <span>Canvas</span>
             <span className="font-mono">{canvasSize.w} × {canvasSize.h}</span>
           </div>
@@ -1019,7 +997,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
         {/* Board Colors */}
         {items.length > 0 && (
           <div className="glass rounded-xl p-4">
-            <h4 className="text-serif text-sm mb-3">Board Colors</h4>
+            <h4 className="text-serif text-sm mb-3 text-foreground">Board Colors</h4>
             <div className="flex flex-wrap gap-1.5">
               {[...new Set(items.map(i => i.color).filter(Boolean))].map(hex => (
                 <div key={hex} className="w-6 h-6 rounded-lg border border-border/50" style={{ backgroundColor: hex }} title={hex} />
@@ -1028,26 +1006,25 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
           </div>
         )}
 
-        {/* Autosave status */}
         <div className="glass rounded-xl p-4">
-          <h4 className="text-serif text-sm mb-2">Auto-Save</h4>
+          <h4 className="text-serif text-sm mb-2 text-foreground">Auto-Save</h4>
           <div className="flex items-center gap-2">
             <div className={`w-2 h-2 rounded-full ${phase === "board" && items.length > 0 ? "bg-accent animate-pulse" : "bg-border"}`} />
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs text-foreground/60">
               {lastSaved ? `Last saved ${lastSaved.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : "Not saved yet"}
             </span>
           </div>
-          <p className="text-[10px] text-muted-foreground/60 mt-1">Boards auto-save 3s after changes</p>
+          <p className="text-[10px] text-foreground/40 mt-1">Boards auto-save 3s after changes</p>
         </div>
 
-        {/* Quick tips */}
         <div className="glass rounded-xl p-4">
-          <h4 className="text-serif text-sm mb-2">Tips</h4>
-          <div className="space-y-1.5 text-[11px] text-muted-foreground">
+          <h4 className="text-serif text-sm mb-2 text-foreground">Tips</h4>
+          <div className="space-y-1.5 text-[11px] text-foreground/50">
             <p>• Double-click notes to edit</p>
             <p>• Drag to reposition</p>
             <p>• Use Connect mode to link notes</p>
             <p>• Use the AI tailor bar to refine</p>
+            <p>• Edit palette colors in the sidebar</p>
           </div>
         </div>
       </div>
@@ -1115,7 +1092,6 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
   const boardRef = useRef<HTMLDivElement>(null);
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
 
-  // Pan state
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const panStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
@@ -1124,7 +1100,6 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
   const displayW = canvasWidth * scale;
   const displayH = canvasHeight * scale;
 
-  // Wheel zoom
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -1134,18 +1109,13 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
         const delta = e.deltaY > 0 ? -10 : 10;
         onZoomChange(Math.max(30, Math.min(250, zoom + delta)));
       } else {
-        // Scroll to pan
-        setPan(p => ({
-          x: p.x - e.deltaX,
-          y: p.y - e.deltaY,
-        }));
+        setPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
       }
     };
     el.addEventListener("wheel", handleWheel, { passive: false });
     return () => el.removeEventListener("wheel", handleWheel);
   }, [zoom, onZoomChange]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
@@ -1157,7 +1127,6 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
     return () => window.removeEventListener("keydown", handleKey);
   }, [zoom, onZoomChange]);
 
-  // Click-and-drag panning (left click on empty canvas, middle click, or alt+click)
   const handleContainerPointerDown = (e: React.PointerEvent) => {
     if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && !connectMode)) {
       e.preventDefault();
@@ -1169,13 +1138,9 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
 
   const handleContainerPointerMove = (e: React.PointerEvent) => {
     if (isPanning) {
-      setPan({
-        x: panStart.current.panX + (e.clientX - panStart.current.x),
-        y: panStart.current.panY + (e.clientY - panStart.current.y),
-      });
+      setPan({ x: panStart.current.panX + (e.clientX - panStart.current.x), y: panStart.current.panY + (e.clientY - panStart.current.y) });
       return;
     }
-    // Sticky note dragging
     if (dragIdx === null) return;
     const board = boardRef.current;
     if (!board) return;
@@ -1185,80 +1150,48 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
     onUpdateItem(dragIdx, { x, y });
   };
 
-  const handleContainerPointerUp = () => {
-    setIsPanning(false);
-    onDragIdx(null);
-  };
+  const handleContainerPointerUp = () => { setIsPanning(false); onDragIdx(null); };
 
   const handleNotePointerDown = (e: React.PointerEvent, idx: number) => {
-    if (connectMode) {
-      onConnectClick(idx);
-      return;
-    }
+    if (connectMode) { onConnectClick(idx); return; }
     if (editingIdx === idx) return;
     const board = boardRef.current;
     if (!board) return;
     const rect = board.getBoundingClientRect();
     const item = items[idx];
-    setDragOffset({
-      x: e.clientX - rect.left - (item.x / canvasWidth) * displayW,
-      y: e.clientY - rect.top - (item.y / canvasHeight) * displayH,
-    });
+    setDragOffset({ x: e.clientX - rect.left - (item.x / canvasWidth) * displayW, y: e.clientY - rect.top - (item.y / canvasHeight) * displayH });
     onDragIdx(idx);
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     e.stopPropagation();
   };
 
-  // Build connector lines
   const connectors: { x1: number; y1: number; x2: number; y2: number; idx: number }[] = [];
   items.forEach((item, i) => {
     if (item.connectedTo) {
       item.connectedTo.forEach(targetIdx => {
         if (targetIdx >= 0 && targetIdx < items.length && targetIdx !== i) {
-          connectors.push({
-            x1: item.x + 70,
-            y1: item.y + 40,
-            x2: items[targetIdx].x + 70,
-            y2: items[targetIdx].y + 40,
-            idx: i,
-          });
+          connectors.push({ x1: item.x + 70, y1: item.y + 40, x2: items[targetIdx].x + 70, y2: items[targetIdx].y + 40, idx: i });
         }
       });
     }
   });
 
   return (
-    <div
-      ref={containerRef}
+    <div ref={containerRef}
       className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : isPanning ? "cursor-grabbing" : "cursor-grab"}`}
       style={{ width: "100%", height: "100%", minHeight: 400 }}
-      onPointerDown={handleContainerPointerDown}
-      onPointerMove={handleContainerPointerMove}
-      onPointerUp={handleContainerPointerUp}
-      onClick={() => { if (!connectMode) onEditIdx(null); }}
-    >
-      {/* Pan hint */}
-      <div className="absolute bottom-3 left-3 z-50 text-[10px] text-muted-foreground/40 pointer-events-none">
+      onPointerDown={handleContainerPointerDown} onPointerMove={handleContainerPointerMove} onPointerUp={handleContainerPointerUp}
+      onClick={() => { if (!connectMode) onEditIdx(null); }}>
+      <div className="absolute bottom-3 left-3 z-50 text-[10px] text-foreground/25 pointer-events-none">
         Scroll to pan · Ctrl+Scroll to zoom · +/- keys · 0 to reset
       </div>
 
-      <div
-        ref={boardRef}
-        className="absolute"
-        style={{
-          width: displayW,
-          height: displayH,
-          transform: `translate(${pan.x}px, ${pan.y}px)`,
-          transformOrigin: "0 0",
-        }}
-      >
-        {/* Dot grid */}
+      <div ref={boardRef} className="absolute" style={{ width: displayW, height: displayH, transform: `translate(${pan.x}px, ${pan.y}px)`, transformOrigin: "0 0" }}>
         <div className="absolute inset-0 opacity-[0.04]" style={{
           backgroundImage: "radial-gradient(circle, hsl(var(--foreground)) 1px, transparent 1px)",
           backgroundSize: `${24 * scale}px ${24 * scale}px`,
         }} />
 
-        {/* Connect mode indicator */}
         {connectMode && (
           <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 glass rounded-full px-4 py-1.5 text-xs text-accent flex items-center gap-2">
             <Link2 className="w-3 h-3" />
@@ -1266,7 +1199,6 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
           </div>
         )}
 
-        {/* SVG connectors */}
         <svg className="absolute inset-0 pointer-events-none" width={displayW} height={displayH}>
           {connectors.map((c, i) => {
             const sx = (c.x1 / canvasWidth) * displayW;
@@ -1274,19 +1206,11 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
             const ex = (c.x2 / canvasWidth) * displayW;
             const ey = (c.y2 / canvasHeight) * displayH;
             const dx = ex - sx;
-            const dy = ey - sy;
             const mx = sx + dx * 0.5;
-            const my = sy + dy * 0.5 - Math.abs(dx) * 0.15;
+            const my = sy + (ey - sy) * 0.5 - Math.abs(dx) * 0.15;
             return (
               <g key={i}>
-                <path
-                  d={`M ${sx} ${sy} Q ${mx} ${my} ${ex} ${ey}`}
-                  fill="none"
-                  stroke="hsl(var(--accent))"
-                  strokeWidth={1.5}
-                  strokeDasharray="6 3"
-                  opacity={0.4}
-                />
+                <path d={`M ${sx} ${sy} Q ${mx} ${my} ${ex} ${ey}`} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.5} strokeDasharray="6 3" opacity={0.4} />
                 <circle cx={ex} cy={ey} r={3} fill="hsl(var(--accent))" opacity={0.4} />
               </g>
             );
@@ -1294,23 +1218,11 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
         </svg>
 
         {items.map((item, i) => (
-          <StickyNote
-            key={i}
-            item={item}
-            index={i}
-            isEditing={editingIdx === i}
-            isDragging={dragIdx === i}
-            isConnectTarget={connectMode && connectFrom !== null && connectFrom !== i}
-            isConnectSource={connectFrom === i}
-            onPointerDown={(e) => handleNotePointerDown(e, i)}
-            onEdit={() => onEditIdx(i)}
-            onUpdate={(updates) => onUpdateItem(i, updates)}
-            onDelete={() => onDeleteItem(i)}
-            canvasWidth={canvasWidth}
-            canvasHeight={canvasHeight}
-            displayWidth={displayW}
-            displayHeight={displayH}
-          />
+          <StickyNote key={i} item={item} index={i} isEditing={editingIdx === i} isDragging={dragIdx === i}
+            isConnectTarget={connectMode && connectFrom !== null && connectFrom !== i} isConnectSource={connectFrom === i}
+            onPointerDown={(e) => handleNotePointerDown(e, i)} onEdit={() => onEditIdx(i)}
+            onUpdate={(updates) => onUpdateItem(i, updates)} onDelete={() => onDeleteItem(i)}
+            canvasWidth={canvasWidth} canvasHeight={canvasHeight} displayWidth={displayW} displayHeight={displayH} />
         ))}
       </div>
     </div>
@@ -1318,30 +1230,18 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
 }
 
 interface StickyNoteProps {
-  item: LayoutItem;
-  index: number;
-  isEditing: boolean;
-  isDragging: boolean;
-  isConnectTarget: boolean;
-  isConnectSource: boolean;
-  onPointerDown: (e: React.PointerEvent) => void;
-  onEdit: () => void;
-  onUpdate: (updates: Partial<LayoutItem>) => void;
-  onDelete: () => void;
-  canvasWidth: number;
-  canvasHeight: number;
-  displayWidth: number;
-  displayHeight: number;
+  item: LayoutItem; index: number; isEditing: boolean; isDragging: boolean;
+  isConnectTarget: boolean; isConnectSource: boolean;
+  onPointerDown: (e: React.PointerEvent) => void; onEdit: () => void;
+  onUpdate: (updates: Partial<LayoutItem>) => void; onDelete: () => void;
+  canvasWidth: number; canvasHeight: number; displayWidth: number; displayHeight: number;
 }
 
 function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isConnectSource, onPointerDown, onEdit, onUpdate, onDelete, canvasWidth, canvasHeight, displayWidth, displayHeight }: StickyNoteProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (isEditing && textareaRef.current) {
-      textareaRef.current.focus();
-      textareaRef.current.select();
-    }
+    if (isEditing && textareaRef.current) { textareaRef.current.focus(); textareaRef.current.select(); }
   }, [isEditing]);
 
   const left = (item.x / canvasWidth) * displayWidth;
@@ -1356,92 +1256,56 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
   };
   const typeLabel = typeLabels[elType] || "NOTE";
 
-  // Shape-specific styles
   const isCircle = elType === "shape_circle";
   const isDiamond = elType === "shape_diamond";
   const isFrame = elType === "frame";
   const isTextBlock = elType === "text_block";
   const isShape = elType === "shape_rect" || isCircle || isDiamond;
 
-  const shapeClass = isCircle ? "rounded-full" :
-    isDiamond ? "rotate-0" :
-    isFrame ? "rounded-xl border-2 border-dashed" :
-    isTextBlock ? "rounded-lg border-none shadow-none" :
-    "rounded-xl";
-
-  const bgColor = isFrame ? "transparent" :
-    isTextBlock ? "transparent" :
-    item.color || "#FFF9DB";
-
+  const shapeClass = isCircle ? "rounded-full" : isDiamond ? "rotate-0" : isFrame ? "rounded-xl border-2 border-dashed" : isTextBlock ? "rounded-lg border-none shadow-none" : "rounded-xl";
+  const bgColor = isFrame ? "transparent" : isTextBlock ? "transparent" : item.color || "#FFF9DB";
   const minWidth = isCircle ? 100 : isDiamond ? 120 : isFrame ? 250 : isTextBlock ? 180 : isCentral ? 160 : 140;
   const maxWidth = isFrame ? 400 : isTextBlock ? 320 : 220;
 
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.8 }}
-      animate={{
-        opacity: 1,
-        scale: isDragging ? 1.05 : isConnectTarget ? 1.08 : 1,
-        zIndex: isDragging ? 50 : isEditing ? 40 : isFrame ? 1 : 10,
-      }}
+      animate={{ opacity: 1, scale: isDragging ? 1.05 : isConnectTarget ? 1.08 : 1, zIndex: isDragging ? 50 : isEditing ? 40 : isFrame ? 1 : 10 }}
       transition={{ delay: index * 0.03, duration: 0.2 }}
       className={`absolute group ${isDragging ? "cursor-grabbing" : isConnectTarget ? "cursor-pointer" : "cursor-grab"}`}
       style={{ left, top }}
       onPointerDown={onPointerDown}
-      onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}
-    >
+      onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}>
       {isDiamond ? (
-        /* Diamond shape uses a rotated inner div */
         <div className="relative" style={{ width: minWidth, height: minWidth }}>
-          <div
-            className={`absolute inset-[15%] rotate-45 shadow-sm border transition-all ${
-              isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
-            } border-border/30 rounded-lg`}
-            style={{ backgroundColor: bgColor }}
-          />
+          <div className={`absolute inset-[15%] rotate-45 shadow-sm border transition-all ${
+            isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
+          } border-border/30 rounded-lg`} style={{ backgroundColor: bgColor }} />
           <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
-            <span className="text-[8px] font-medium tracking-wider opacity-40 uppercase mb-0.5">{typeLabel}</span>
+            <span className="text-[8px] font-medium tracking-wider text-foreground/40 uppercase mb-0.5">{typeLabel}</span>
             {isEditing ? (
-              <textarea
-                ref={textareaRef}
-                value={item.content}
-                onChange={(e) => onUpdate({ content: e.target.value })}
-                onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }}
-                onClick={(e) => e.stopPropagation()}
-                className="w-[70%] bg-transparent border-none outline-none resize-none text-xs leading-relaxed text-center min-h-[30px]"
-                rows={2}
-              />
+              <textarea ref={textareaRef} value={item.content} onChange={(e) => onUpdate({ content: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }} onClick={(e) => e.stopPropagation()}
+                className="w-[70%] bg-transparent border-none outline-none resize-none text-xs leading-relaxed text-center min-h-[30px] text-foreground" rows={2} />
             ) : (
-              <p className="text-xs leading-relaxed text-center px-4 font-medium">{item.content}</p>
+              <p className="text-xs leading-relaxed text-center px-4 font-medium text-foreground">{item.content}</p>
             )}
           </div>
           {item.connectedTo && item.connectedTo.length > 0 && (
-            <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium z-20">
-              {item.connectedTo.length}
-            </div>
+            <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium z-20">{item.connectedTo.length}</div>
           )}
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20">
             <Trash2 className="w-2.5 h-2.5" />
           </button>
         </div>
       ) : (
-        <div
-          className={`relative ${shapeClass} shadow-sm border transition-all ${
-            isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
-          } ${isCentral ? "border-accent/30" : isFrame ? "border-accent/20" : isTextBlock ? "border-transparent" : "border-border/30"}`}
-          style={{
-            backgroundColor: bgColor,
-            minWidth,
-            maxWidth,
-            minHeight: isFrame ? 150 : isCircle ? minWidth : undefined,
-            aspectRatio: isCircle ? "1" : undefined,
-          }}
-        >
-          {/* Type label */}
+        <div className={`relative ${shapeClass} shadow-sm border transition-all ${
+          isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
+        } ${isCentral ? "border-accent/30" : isFrame ? "border-accent/20" : isTextBlock ? "border-transparent" : "border-border/30"}`}
+          style={{ backgroundColor: bgColor, minWidth, maxWidth, minHeight: isFrame ? 150 : isCircle ? minWidth : undefined, aspectRatio: isCircle ? "1" : undefined }}>
           <div className={`px-3 pt-2 flex items-center gap-1.5 ${isCircle ? "justify-center" : ""}`}>
-            <span className="text-[9px] font-medium tracking-wider opacity-40 uppercase">{typeLabel}</span>
+            <span className="text-[9px] font-medium tracking-wider text-foreground/40 uppercase">{typeLabel}</span>
           </div>
-          {/* Paper fold for sticky notes only */}
           {!isShape && !isFrame && !isTextBlock && (
             <div className="absolute top-0 right-0 w-4 h-4 overflow-hidden">
               <div className="absolute top-0 right-0 w-6 h-6 -translate-x-1 translate-y-1 rotate-45" style={{ backgroundColor: "rgba(0,0,0,0.04)" }} />
@@ -1452,28 +1316,18 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           </div>
           <div className={`p-3 pt-1 ${isCircle ? "flex items-center justify-center" : ""}`}>
             {isEditing ? (
-              <textarea
-                ref={textareaRef}
-                value={item.content}
-                onChange={(e) => onUpdate({ content: e.target.value })}
-                onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }}
-                onClick={(e) => e.stopPropagation()}
-                className={`w-full bg-transparent border-none outline-none resize-none text-xs leading-relaxed min-h-[40px] ${isTextBlock ? "text-base font-medium" : ""}`}
-                rows={isFrame ? 1 : 3}
-              />
+              <textarea ref={textareaRef} value={item.content} onChange={(e) => onUpdate({ content: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }} onClick={(e) => e.stopPropagation()}
+                className={`w-full bg-transparent border-none outline-none resize-none text-xs leading-relaxed min-h-[40px] text-foreground ${isTextBlock ? "text-base font-medium" : ""}`}
+                rows={isFrame ? 1 : 3} />
             ) : (
-              <p className={`text-xs leading-relaxed ${isCentral || isCircle ? "font-medium text-center" : ""} ${isTextBlock ? "text-base font-medium text-serif" : ""}`}>{item.content}</p>
+              <p className={`text-xs leading-relaxed text-foreground ${isCentral || isCircle ? "font-medium text-center" : ""} ${isTextBlock ? "text-base font-medium text-serif" : ""}`}>{item.content}</p>
             )}
           </div>
           {item.connectedTo && item.connectedTo.length > 0 && (
-            <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium">
-              {item.connectedTo.length}
-            </div>
+            <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium">{item.connectedTo.length}</div>
           )}
-          <button
-            onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
-          >
+          <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
             <Trash2 className="w-2.5 h-2.5" />
           </button>
         </div>
