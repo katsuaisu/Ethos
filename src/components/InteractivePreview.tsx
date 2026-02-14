@@ -1,9 +1,19 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown } from "lucide-react";
+import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Slider } from "./ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { toast } from "sonner";
+import ConvertDialog from "./ConvertDialog";
+
+const ELEMENT_TYPES = [
+  { id: "sticky_note" as const, label: "Sticky Note", icon: Square, desc: "Classic sticky note" },
+  { id: "shape_rect" as const, label: "Rectangle", icon: Square, desc: "Rectangle shape" },
+  { id: "shape_circle" as const, label: "Circle", icon: Circle, desc: "Circle shape" },
+  { id: "shape_diamond" as const, label: "Diamond", icon: Diamond, desc: "Decision diamond" },
+  { id: "text_block" as const, label: "Text", icon: Type, desc: "Text block" },
+  { id: "frame" as const, label: "Frame", icon: Frame, desc: "Grouping frame" },
+];
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
 const STORAGE_KEY = "ethos-preview-sessions";
@@ -17,6 +27,7 @@ interface LayoutItem {
   width?: number;
   height?: number;
   connectedTo?: number[];
+  elementType?: "sticky_note" | "shape_rect" | "shape_circle" | "shape_diamond" | "text_block" | "frame";
 }
 
 interface FollowUpQ {
@@ -130,6 +141,8 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const [gridDensity, setGridDensity] = useState(3); // 1-5 (sparse to dense)
   const [connectMode, setConnectMode] = useState(false);
   const [connectFrom, setConnectFrom] = useState<number | null>(null);
+  const [showConvert, setShowConvert] = useState(false);
+  const [addElementType, setAddElementType] = useState<LayoutItem["elementType"]>("sticky_note");
 
   // Zoom and canvas
   const [zoom, setZoom] = useState(100);
@@ -464,14 +477,33 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
     setShowSessions(false);
   };
 
-  const addStickyNote = () => {
+  const deleteSession = (id: string) => {
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeSessionId === id) { setItems([]); setActiveSessionId(null); setPhase("input"); }
+    toast.success("Board deleted");
+  };
+
+  const addElement = (elType?: LayoutItem["elementType"]) => {
+    const type = elType || addElementType || "sticky_note";
     const palette = importedPalette ? Object.values(importedPalette) : STICKY_COLORS.map(c => c.hex);
+    const defaults: Record<string, Partial<LayoutItem>> = {
+      sticky_note: { content: "New note", width: 140, height: 100 },
+      shape_rect: { content: "Process", width: 160, height: 80 },
+      shape_circle: { content: "Node", width: 120, height: 120 },
+      shape_diamond: { content: "Decision?", width: 140, height: 140 },
+      text_block: { content: "Heading text", width: 200, height: 60 },
+      frame: { content: "Section", width: 300, height: 250 },
+    };
+    const def = defaults[type] || defaults.sticky_note;
     const newItem: LayoutItem = {
-      content: "New note",
+      content: def.content || "New",
       x: 50 + Math.random() * 400,
       y: 50 + Math.random() * 300,
-      type: "sticky_note",
-      color: palette[Math.floor(Math.random() * palette.length)],
+      type: type,
+      elementType: type as LayoutItem["elementType"],
+      color: type === "frame" ? "transparent" : type === "text_block" ? "transparent" : palette[Math.floor(Math.random() * palette.length)],
+      width: def.width,
+      height: def.height,
     };
     setItems(prev => [...prev, newItem]);
   };
@@ -516,16 +548,17 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
               <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
                 <div className="space-y-1 max-h-[180px] overflow-y-auto scrollbar-thin">
                   {sessions.map(s => (
-                    <button
-                      key={s.id}
-                      onClick={() => loadSession(s)}
-                      className={`w-full text-left px-2.5 py-2 rounded-lg text-xs transition-colors ${
-                        activeSessionId === s.id ? "bg-accent/10 text-accent" : "bg-secondary/50 hover:bg-secondary text-foreground"
-                      }`}
-                    >
-                      <span className="truncate block">{s.name}</span>
-                      <span className="text-[10px] text-muted-foreground/60 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
-                    </button>
+                    <div key={s.id} className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs transition-colors group ${
+                      activeSessionId === s.id ? "bg-accent/10 text-accent" : "bg-secondary/50 hover:bg-secondary text-foreground"
+                    }`}>
+                      <button onClick={() => loadSession(s)} className="flex-1 text-left min-w-0">
+                        <span className="truncate block">{s.name}</span>
+                        <span className="text-[10px] text-muted-foreground/60 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
+                      </button>
+                      <button onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-destructive transition-all shrink-0">
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    </div>
                   ))}
                 </div>
               </motion.div>
@@ -630,12 +663,38 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
         {/* Toolbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-border/30 shrink-0">
           <div className="flex items-center gap-2">
-            {phase === "board" && (
+             {phase === "board" && (
               <>
-                <button onClick={addStickyNote} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs hover:bg-secondary/80 transition-colors">
-                  <Plus className="w-3 h-3" />
-                  Note
-                </button>
+                {/* Element type picker */}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs hover:opacity-90 transition-opacity">
+                      <Plus className="w-3 h-3" />
+                      Add
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-48 p-2" align="start">
+                    <p className="text-[10px] font-medium text-muted-foreground mb-1.5 px-2">Elements</p>
+                    {ELEMENT_TYPES.map(el => {
+                      const Icon = el.icon;
+                      return (
+                        <button
+                          key={el.id}
+                          onClick={() => addElement(el.id)}
+                          className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-xs hover:bg-secondary transition-colors"
+                        >
+                          <Icon className="w-3.5 h-3.5 text-accent" />
+                          <div>
+                            <span className="font-medium text-foreground">{el.label}</span>
+                            <span className="text-[9px] text-muted-foreground ml-1.5">{el.desc}</span>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </PopoverContent>
+                </Popover>
+
                 <button
                   onClick={() => { setConnectMode(!connectMode); setConnectFrom(null); }}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs transition-colors ${
@@ -709,6 +768,15 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                     </div>
                   </PopoverContent>
                 </Popover>
+
+                {/* Convert button */}
+                <button
+                  onClick={() => setShowConvert(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-secondary text-secondary-foreground text-xs hover:bg-secondary/80 transition-colors"
+                >
+                  <FileOutput className="w-3 h-3" />
+                  Convert
+                </button>
               </>
             )}
           </div>
@@ -776,11 +844,16 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   <div className="mt-8">
                     <h5 className="text-serif text-sm text-muted-foreground mb-3">Recent Boards</h5>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {sessions.slice(0, 4).map(s => (
-                        <button key={s.id} onClick={() => loadSession(s)} className="text-left p-3 rounded-xl bg-secondary/50 hover:bg-secondary transition-colors text-xs">
-                          <span className="text-foreground truncate block font-medium">{s.name}</span>
-                          <span className="text-muted-foreground/60 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
-                        </button>
+                      {sessions.slice(0, 6).map(s => (
+                        <div key={s.id} className="flex items-center gap-1 p-3 rounded-xl bg-secondary/50 hover:bg-secondary transition-colors text-xs group">
+                          <button onClick={() => loadSession(s)} className="flex-1 text-left min-w-0">
+                            <span className="text-foreground truncate block font-medium">{s.name}</span>
+                            <span className="text-muted-foreground/60 capitalize">{s.layoutType} · {new Date(s.date).toLocaleDateString()}</span>
+                          </button>
+                          <button onClick={() => deleteSession(s.id)} className="opacity-0 group-hover:opacity-100 text-muted-foreground/40 hover:text-destructive transition-all shrink-0">
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -978,6 +1051,13 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
           </div>
         </div>
       </div>
+
+      {/* Convert Dialog */}
+      <AnimatePresence>
+        {showConvert && (
+          <ConvertDialog items={items} onClose={() => setShowConvert(false)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1267,12 +1347,34 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
   const left = (item.x / canvasWidth) * displayWidth;
   const top = (item.y / canvasHeight) * displayHeight;
   const isCentral = item.type === "central";
+  const elType = item.elementType || item.type;
 
-  const typeLabel = item.type === "sticky_note" || item.type === "leaf"
-    ? "STICKY NOTE"
-    : item.type === "central" || item.type === "branch"
-    ? "SHAPE"
-    : "TEXT";
+  const typeLabels: Record<string, string> = {
+    sticky_note: "STICKY NOTE", leaf: "STICKY NOTE", central: "CENTER", branch: "BRANCH",
+    shape_rect: "RECTANGLE", shape_circle: "CIRCLE", shape_diamond: "DIAMOND",
+    text_block: "TEXT", frame: "FRAME", milestone: "MILESTONE", event: "EVENT",
+  };
+  const typeLabel = typeLabels[elType] || "NOTE";
+
+  // Shape-specific styles
+  const isCircle = elType === "shape_circle";
+  const isDiamond = elType === "shape_diamond";
+  const isFrame = elType === "frame";
+  const isTextBlock = elType === "text_block";
+  const isShape = elType === "shape_rect" || isCircle || isDiamond;
+
+  const shapeClass = isCircle ? "rounded-full" :
+    isDiamond ? "rotate-0" :
+    isFrame ? "rounded-xl border-2 border-dashed" :
+    isTextBlock ? "rounded-lg border-none shadow-none" :
+    "rounded-xl";
+
+  const bgColor = isFrame ? "transparent" :
+    isTextBlock ? "transparent" :
+    item.color || "#FFF9DB";
+
+  const minWidth = isCircle ? 100 : isDiamond ? 120 : isFrame ? 250 : isTextBlock ? 180 : isCentral ? 160 : 140;
+  const maxWidth = isFrame ? 400 : isTextBlock ? 320 : 220;
 
   return (
     <motion.div
@@ -1280,7 +1382,7 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
       animate={{
         opacity: 1,
         scale: isDragging ? 1.05 : isConnectTarget ? 1.08 : 1,
-        zIndex: isDragging ? 50 : isEditing ? 40 : 10,
+        zIndex: isDragging ? 50 : isEditing ? 40 : isFrame ? 1 : 10,
       }}
       transition={{ delay: index * 0.03, duration: 0.2 }}
       className={`absolute group ${isDragging ? "cursor-grabbing" : isConnectTarget ? "cursor-pointer" : "cursor-grab"}`}
@@ -1288,51 +1390,94 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
       onPointerDown={onPointerDown}
       onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}
     >
-      <div
-        className={`relative rounded-xl shadow-sm border transition-all ${
-          isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
-        } ${isCentral ? "border-accent/30" : "border-border/30"}`}
-        style={{ backgroundColor: item.color || "#FFF9DB", minWidth: isCentral ? 160 : 140, maxWidth: 220 }}
-      >
-        {/* Type label */}
-        <div className="px-3 pt-2 flex items-center gap-1.5">
-          <span className="text-[9px] font-medium tracking-wider opacity-40 uppercase">{typeLabel}</span>
-        </div>
-        {/* Paper fold */}
-        <div className="absolute top-0 right-0 w-4 h-4 overflow-hidden">
-          <div className="absolute top-0 right-0 w-6 h-6 -translate-x-1 translate-y-1 rotate-45" style={{ backgroundColor: "rgba(0,0,0,0.04)" }} />
-        </div>
-        <div className="absolute -left-0.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 transition-opacity">
-          <GripVertical className="w-3 h-3 text-foreground" />
-        </div>
-        <div className="p-3 pt-1">
-          {isEditing ? (
-            <textarea
-              ref={textareaRef}
-              value={item.content}
-              onChange={(e) => onUpdate({ content: e.target.value })}
-              onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }}
-              onClick={(e) => e.stopPropagation()}
-              className="w-full bg-transparent border-none outline-none resize-none text-xs leading-relaxed min-h-[40px]"
-              rows={3}
-            />
-          ) : (
-            <p className={`text-xs leading-relaxed ${isCentral ? "font-medium text-center" : ""}`}>{item.content}</p>
-          )}
-        </div>
-        {/* Connection count badge */}
-        {item.connectedTo && item.connectedTo.length > 0 && (
-          <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium">
-            {item.connectedTo.length}
+      {isDiamond ? (
+        /* Diamond shape uses a rotated inner div */
+        <div className="relative" style={{ width: minWidth, height: minWidth }}>
+          <div
+            className={`absolute inset-[15%] rotate-45 shadow-sm border transition-all ${
+              isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
+            } border-border/30 rounded-lg`}
+            style={{ backgroundColor: bgColor }}
+          />
+          <div className="absolute inset-0 flex flex-col items-center justify-center z-10">
+            <span className="text-[8px] font-medium tracking-wider opacity-40 uppercase mb-0.5">{typeLabel}</span>
+            {isEditing ? (
+              <textarea
+                ref={textareaRef}
+                value={item.content}
+                onChange={(e) => onUpdate({ content: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }}
+                onClick={(e) => e.stopPropagation()}
+                className="w-[70%] bg-transparent border-none outline-none resize-none text-xs leading-relaxed text-center min-h-[30px]"
+                rows={2}
+              />
+            ) : (
+              <p className="text-xs leading-relaxed text-center px-4 font-medium">{item.content}</p>
+            )}
           </div>
-        )}
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+          {item.connectedTo && item.connectedTo.length > 0 && (
+            <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium z-20">
+              {item.connectedTo.length}
+            </div>
+          )}
+          <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20">
+            <Trash2 className="w-2.5 h-2.5" />
+          </button>
+        </div>
+      ) : (
+        <div
+          className={`relative ${shapeClass} shadow-sm border transition-all ${
+            isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
+          } ${isCentral ? "border-accent/30" : isFrame ? "border-accent/20" : isTextBlock ? "border-transparent" : "border-border/30"}`}
+          style={{
+            backgroundColor: bgColor,
+            minWidth,
+            maxWidth,
+            minHeight: isFrame ? 150 : isCircle ? minWidth : undefined,
+            aspectRatio: isCircle ? "1" : undefined,
+          }}
         >
-          <Trash2 className="w-2.5 h-2.5" />
-        </button>
-      </div>
+          {/* Type label */}
+          <div className={`px-3 pt-2 flex items-center gap-1.5 ${isCircle ? "justify-center" : ""}`}>
+            <span className="text-[9px] font-medium tracking-wider opacity-40 uppercase">{typeLabel}</span>
+          </div>
+          {/* Paper fold for sticky notes only */}
+          {!isShape && !isFrame && !isTextBlock && (
+            <div className="absolute top-0 right-0 w-4 h-4 overflow-hidden">
+              <div className="absolute top-0 right-0 w-6 h-6 -translate-x-1 translate-y-1 rotate-45" style={{ backgroundColor: "rgba(0,0,0,0.04)" }} />
+            </div>
+          )}
+          <div className="absolute -left-0.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 transition-opacity">
+            <GripVertical className="w-3 h-3 text-foreground" />
+          </div>
+          <div className={`p-3 pt-1 ${isCircle ? "flex items-center justify-center" : ""}`}>
+            {isEditing ? (
+              <textarea
+                ref={textareaRef}
+                value={item.content}
+                onChange={(e) => onUpdate({ content: e.target.value })}
+                onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }}
+                onClick={(e) => e.stopPropagation()}
+                className={`w-full bg-transparent border-none outline-none resize-none text-xs leading-relaxed min-h-[40px] ${isTextBlock ? "text-base font-medium" : ""}`}
+                rows={isFrame ? 1 : 3}
+              />
+            ) : (
+              <p className={`text-xs leading-relaxed ${isCentral || isCircle ? "font-medium text-center" : ""} ${isTextBlock ? "text-base font-medium text-serif" : ""}`}>{item.content}</p>
+            )}
+          </div>
+          {item.connectedTo && item.connectedTo.length > 0 && (
+            <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium">
+              {item.connectedTo.length}
+            </div>
+          )}
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <Trash2 className="w-2.5 h-2.5" />
+          </button>
+        </div>
+      )}
     </motion.div>
   );
 }
