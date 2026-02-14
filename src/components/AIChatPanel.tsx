@@ -25,7 +25,11 @@ function loadActiveId(): string | null {
   try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; }
 }
 
-export default function AIChatPanel() {
+interface AIChatPanelProps {
+  onShareIdeas?: (ideas: string[]) => void;
+}
+
+export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
   const [activeId, setActiveId] = useState<string | null>(loadActiveId);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -61,7 +65,12 @@ export default function AIChatPanel() {
     if (activeId && messages.length > 0) {
       setSessions(prev => prev.map(s => s.id === activeId ? { ...s, messages, date: new Date().toISOString() } : s));
     }
-  }, [messages, activeId]);
+    // Share user ideas with parent
+    if (onShareIdeas) {
+      const userIdeas = messages.filter(m => m.role === "user").map(m => m.content);
+      onShareIdeas(userIdeas);
+    }
+  }, [messages, activeId, onShareIdeas]);
 
   const saveCurrentChat = () => {
     const name = messages.find(m => m.role === "user")?.content.slice(0, 40) || "Untitled";
