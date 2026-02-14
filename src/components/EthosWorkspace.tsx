@@ -68,7 +68,7 @@ export default function EthosWorkspace() {
       {/* Main content area */}
       <div className="flex-1 flex flex-col lg:flex-row gap-0 overflow-hidden px-4 pb-4">
         {/* Sidebar/Tabs area */}
-        <div className="w-full lg:w-[420px] xl:w-[480px] flex flex-col glass rounded-2xl overflow-hidden shrink-0">
+        <div className="w-full lg:w-[420px] xl:w-[480px] flex flex-col glass rounded-2xl overflow-hidden shrink-0 min-h-0 max-h-[calc(100vh-120px)] lg:max-h-none">
           {/* Tab navigation */}
           <div className="flex border-b border-border/50 px-2 pt-2">
             {tabs.map((tab) => {
