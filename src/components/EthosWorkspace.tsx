@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { MessageSquare, Image, Layout, ArrowRightLeft, Sparkles } from "lucide-react";
+import { MessageSquare, Image, Layout, ArrowRightLeft } from "lucide-react";
 import AIChatPanel from "./AIChatPanel";
 import ScanPanel from "./ScanPanel";
 import InteractivePreview from "./InteractivePreview";
@@ -54,13 +54,13 @@ export default function EthosWorkspace() {
       {/* Top nav bar */}
       <header className="px-6 py-3 flex items-center justify-between border-b border-border/30 shrink-0">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
-            <Sparkles className="w-4 h-4 text-primary-foreground" />
+          <div className="w-8 h-8 rounded-lg border border-border flex items-center justify-center">
+            <span className="text-serif text-base font-normal text-foreground leading-none">e</span>
           </div>
           <div>
             <h1 className="text-serif text-xl leading-none">Ethos</h1>
             <p className="text-[10px] tracking-[0.2em] uppercase text-muted-foreground mt-0.5">
-              A workspace that's yours
+              workspace
             </p>
           </div>
         </div>

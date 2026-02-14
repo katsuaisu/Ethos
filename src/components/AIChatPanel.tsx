@@ -221,22 +221,24 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain scrollbar-thin px-4 py-3 space-y-4" style={{ minHeight: 0, WebkitOverflowScrolling: "touch" }}>
         {messages.length === 0 && (
           <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center justify-center h-full text-center py-16">
-            <div className="w-14 h-14 rounded-2xl bg-accent/10 flex items-center justify-center mb-5">
-              <Sparkles className="w-6 h-6 text-accent" />
+            <div className="w-14 h-14 rounded-2xl border border-border flex items-center justify-center mb-5">
+              <span className="text-serif text-2xl text-foreground">e</span>
             </div>
-            <h3 className="text-2xl text-serif mb-3">Welcome to Ethos</h3>
+            <h3 className="text-2xl text-serif mb-3">Ethos</h3>
             <p className="text-sm text-muted-foreground max-w-[320px] leading-relaxed mb-6">
-              Your AI-powered creative workspace for brainstorming, organizing ideas, and turning thoughts into visual boards, presentations, and documents.
+              Your creative workspace for brainstorming, organizing ideas, and turning thoughts into visual boards, presentations, and documents.
             </p>
             <div className="grid grid-cols-1 gap-2 text-left max-w-[300px] w-full">
               {[
-                { emoji: "💡", title: "Ideate", desc: "Brainstorm and structure your ideas with AI" },
-                { emoji: "📸", title: "Scan", desc: "Analyze images, PDFs, and docs for insights" },
-                { emoji: "🎨", title: "Preview", desc: "Generate visual boards — mindmaps, flowcharts, grids" },
-                { emoji: "🔄", title: "Sync", desc: "Push your boards directly to Miro" },
+                { title: "Ideate", desc: "Brainstorm and structure your ideas with AI" },
+                { title: "Scan", desc: "Analyze images, PDFs, and docs for insights" },
+                { title: "Preview", desc: "Generate visual boards \u2014 mindmaps, flowcharts, grids" },
+                { title: "Sync", desc: "Push your boards directly to Miro" },
               ].map(item => (
                 <div key={item.title} className="flex items-start gap-3 bg-secondary/30 rounded-xl px-3 py-2.5">
-                  <span className="text-lg">{item.emoji}</span>
+                  <div className="w-6 h-6 rounded-md border border-border/60 flex items-center justify-center shrink-0 mt-0.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-accent" />
+                  </div>
                   <div>
                     <p className="text-xs font-medium text-foreground">{item.title}</p>
                     <p className="text-[11px] text-muted-foreground leading-snug">{item.desc}</p>
@@ -244,7 +246,7 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
                 </div>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground/60 mt-6">Start by typing anything below ↓</p>
+            <p className="text-xs text-muted-foreground/60 mt-6">Start by typing anything below</p>
           </motion.div>
         )}
 
