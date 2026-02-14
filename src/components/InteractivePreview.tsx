@@ -15,6 +15,18 @@ const ELEMENT_TYPES = [
   { id: "frame" as const, label: "Frame", icon: Frame, desc: "Grouping frame" },
 ];
 
+// Board types the user can pick before generating
+const BOARD_TYPES = [
+  { id: "auto", label: "Auto", desc: "AI picks the best layout", emoji: "✨" },
+  { id: "sticky_notes", label: "Sticky Notes", desc: "Classic idea board", emoji: "📝" },
+  { id: "flowchart", label: "Flowchart", desc: "Process flow with decisions", emoji: "🔀" },
+  { id: "mindmap", label: "Mind Map", desc: "Branching ideas from center", emoji: "🧠" },
+  { id: "kanban", label: "Kanban", desc: "To-do / Doing / Done columns", emoji: "📋" },
+  { id: "swot", label: "SWOT", desc: "Strengths, Weaknesses, Opportunities, Threats", emoji: "📊" },
+  { id: "timeline", label: "Timeline", desc: "Events in chronological order", emoji: "⏳" },
+  { id: "mixed", label: "Mixed", desc: "Combine multiple element types", emoji: "🎨" },
+];
+
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
 const STORAGE_KEY = "ethos-preview-sessions";
 const SCAN_STORAGE_KEY = "ethos-scan-history";
@@ -89,7 +101,7 @@ const BOARD_THEMES = [
   { name: "Monochrome", colors: ["#F5F5F5", "#EBEBEB", "#E0E0E0", "#D6D6D6", "#CCCCCC", "#F0F0F0"] },
 ];
 
-type Phase = "input" | "questions" | "generating" | "board";
+type Phase = "input" | "type-select" | "questions" | "generating" | "board";
 
 // Organize items into a clean grid layout based on density
 function organizeGrid(items: LayoutItem[], density: number, canvasW: number): LayoutItem[] {
@@ -148,6 +160,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const [connectFrom, setConnectFrom] = useState<number | null>(null);
   const [showConvert, setShowConvert] = useState(false);
   const [addElementType, setAddElementType] = useState<LayoutItem["elementType"]>("sticky_note");
+  const [selectedBoardTypes, setSelectedBoardTypes] = useState<string[]>(["auto"]);
 
   // Zoom and canvas
   const [zoom, setZoom] = useState(100);
@@ -332,11 +345,33 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     }
   };
 
+  const startBoardCreation = () => {
+    if (!input.trim()) return;
+    setPhase("type-select");
+  };
+
+  const proceedFromTypeSelect = () => {
+    askFollowUps();
+  };
+
+  const toggleBoardType = (id: string) => {
+    setSelectedBoardTypes(prev => {
+      if (id === "auto") return ["auto"];
+      const without = prev.filter(t => t !== "auto");
+      if (without.includes(id)) {
+        const result = without.filter(t => t !== id);
+        return result.length === 0 ? ["auto"] : result;
+      }
+      return [...without, id];
+    });
+  };
+
   const askFollowUps = useCallback(async () => {
     if (!input.trim()) return;
     setLoadingQs(true);
     setPhase("questions");
 
+    const boardTypeDesc = selectedBoardTypes.includes("auto") ? "the best layout type" : selectedBoardTypes.join(", ");
     const scanContext = importedPalette ? `\n\nThe user has also scanned a moodboard with these extracted colors: ${JSON.stringify(importedPalette)}. Consider these aesthetics.` : "";
     const ideaContext = importedIdeas && importedIdeas.length > 0 ? `\n\nThe user has these ideas from a previous chat: ${importedIdeas.join(", ")}. Consider these.` : "";
 
@@ -345,7 +380,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
         body: JSON.stringify({
-          messages: [{ role: "user", content: `The user wants to create a ${layoutType} board from this brain dump:\n\n"${input}"${scanContext}${ideaContext}\n\nAsk 3 short, specific follow-up questions to better understand their needs before generating the board. Questions should help clarify scope, priorities, audience, or context. Return ONLY a JSON array of strings like: ["Question 1?", "Question 2?", "Question 3?"]` }],
+          messages: [{ role: "user", content: `The user wants to create a ${boardTypeDesc} board with ${layoutType} arrangement from this brain dump:\n\n"${input}"${scanContext}${ideaContext}\n\nAsk 3 short, specific follow-up questions to better understand their needs before generating the board. Questions should help clarify scope, priorities, audience, or context. Return ONLY a JSON array of strings like: ["Question 1?", "Question 2?", "Question 3?"]` }],
           mode: "ideation",
         }),
       });
@@ -363,7 +398,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     } finally {
       setLoadingQs(false);
     }
-  }, [input, layoutType, importedPalette, importedIdeas]);
+  }, [input, layoutType, importedPalette, importedIdeas, selectedBoardTypes]);
 
   const answerQuestion = () => {
     const updated = [...followUps];
@@ -410,18 +445,28 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     const scanContext = importedPalette ? `\nThe user scanned a moodboard and extracted: ${JSON.stringify(importedPalette)}. Use these colors.` : "";
     const ideaContext = importedIdeas && importedIdeas.length > 0 ? `\nThe user also brainstormed these ideas in chat: ${importedIdeas.join("; ")}. Integrate relevant ones.` : "";
 
+    // Board type instructions
+    const boardTypeDesc = selectedBoardTypes.includes("auto") ? "" : `\n\nThe user specifically wants these board types: ${selectedBoardTypes.join(", ")}. ${
+      selectedBoardTypes.includes("flowchart") ? "Use shape_rect for processes, shape_diamond for decisions, and connectedTo for flow arrows." : ""
+    }${selectedBoardTypes.includes("kanban") ? "Create columns (use frame elements) with sticky notes inside for To-do, In Progress, Done." : ""
+    }${selectedBoardTypes.includes("swot") ? "Create 4 quadrant frames: Strengths, Weaknesses, Opportunities, Threats. Place relevant sticky notes inside each." : ""
+    }${selectedBoardTypes.includes("mixed") ? "Use a variety of element types: sticky_note, shape_rect, shape_circle, shape_diamond, text_block, frame." : ""
+    }`;
+
     try {
       const colorInstructions = `Use these colors: ${paletteColors.join(", ")}`;
       const cols = gridDensity + 1;
       const spacingX = Math.floor(canvasSize.w / (cols + 0.5));
 
+      const elementTypeInstruction = `\nEach item can have an optional "elementType" field: "sticky_note"|"shape_rect"|"shape_circle"|"shape_diamond"|"text_block"|"frame". Also optional "width" and "height" numbers.`;
+
       const layoutPrompts: Record<string, string> = {
-        grid: `Organize into a clean ${cols}-column grid. Return ONLY a JSON array:\n{"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex", "connectedTo": [indices of related items]}\nStart x at 40, spacing ${spacingX}px horizontally, 180px vertically. ${colorInstructions}. Max 12 items.`,
-        mindmap: `Create a radial mindmap. Center node at x:${Math.floor(canvasSize.w / 2)}, y:${Math.floor(canvasSize.h / 2)}.\nBranches radiate outward at ~${Math.floor(Math.min(canvasSize.w, canvasSize.h) * 0.3)}px distance.\nEach: {"content": "text", "x": number, "y": number, "type": "central"|"branch"|"leaf", "color": "#hex", "connectedTo": [parent_index]}\n${colorInstructions}. Max 15 items.`,
-        timeline: `Create a horizontal timeline. Items flow left to right, x starting at 60, increment by 250px.\ny alternates between 100 and 280.\nEach: {"content": "text", "x": number, "y": number, "type": "milestone"|"event", "color": "#hex", "connectedTo": [previous_index]}\n${colorInstructions}. Max 10 items.`,
+        grid: `Organize into a clean ${cols}-column grid. Return ONLY a JSON array:\n{"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex", "connectedTo": [indices of related items]${elementTypeInstruction}}\nStart x at 40, spacing ${spacingX}px horizontally, 180px vertically. ${colorInstructions}. Max 12 items.`,
+        mindmap: `Create a radial mindmap. Center node at x:${Math.floor(canvasSize.w / 2)}, y:${Math.floor(canvasSize.h / 2)}.\nBranches radiate outward at ~${Math.floor(Math.min(canvasSize.w, canvasSize.h) * 0.3)}px distance.\nEach: {"content": "text", "x": number, "y": number, "type": "central"|"branch"|"leaf", "color": "#hex", "connectedTo": [parent_index]${elementTypeInstruction}}\n${colorInstructions}. Max 15 items.`,
+        timeline: `Create a horizontal timeline. Items flow left to right, x starting at 60, increment by 250px.\ny alternates between 100 and 280.\nEach: {"content": "text", "x": number, "y": number, "type": "milestone"|"event", "color": "#hex", "connectedTo": [previous_index]${elementTypeInstruction}}\n${colorInstructions}. Max 10 items.`,
       };
 
-      const fullPrompt = `${layoutPrompts[layoutType]}${scanContext}${ideaContext}\n\n${context ? `Additional context:\n${context}\n\n` : ""}Content to organize:\n${braindump}\n\nReturn ONLY a valid JSON array.`;
+      const fullPrompt = `${layoutPrompts[layoutType]}${boardTypeDesc}${scanContext}${ideaContext}\n\n${context ? `Additional context:\n${context}\n\n` : ""}Content to organize:\n${braindump}\n\nReturn ONLY a valid JSON array.`;
 
       const resp = await fetch(CHAT_URL, {
         method: "POST",
@@ -442,7 +487,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
       setStatus("Generation failed. Try again.");
       setPhase("input");
     } finally { setGenerating(false); }
-  }, [layoutType, importedPalette, importedIdeas, gridDensity, canvasSize, getActivePalette]);
+  }, [layoutType, importedPalette, importedIdeas, gridDensity, canvasSize, getActivePalette, selectedBoardTypes]);
 
   const saveSession = () => { doAutoSave(); toast.success("Board saved!"); };
 
@@ -830,13 +875,9 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
                   rows={5}
                   className="w-full bg-transparent border border-border rounded-xl p-4 text-sm text-foreground outline-none focus:ring-1 focus:ring-accent/40 resize-none placeholder:text-foreground/30"
                 />
-                <button onClick={askFollowUps} disabled={!input.trim() || loadingQs}
+                <button onClick={startBoardCreation} disabled={!input.trim()}
                   className="w-full px-4 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-40">
-                  {loadingQs ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /><span className="animate-pulse-slow">Thinking...</span></>
-                  ) : (
-                    <><Sparkles className="w-4 h-4" />Generate Board</>
-                  )}
+                  <Sparkles className="w-4 h-4" />Generate Board
                 </button>
 
                 {/* Import from Scan shortcut */}
@@ -872,6 +913,49 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
                     </div>
                   </div>
                 )}
+              </motion.div>
+            )}
+
+            {/* Phase: Board Type Selection */}
+            {phase === "type-select" && (
+              <motion.div key="type-select" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="max-w-lg mx-auto pt-12 space-y-4">
+                <div className="text-center mb-4">
+                  <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center mx-auto mb-3">
+                    <Layout className="w-5 h-5 text-accent" />
+                  </div>
+                  <h3 className="text-serif text-xl mb-1 text-foreground">What kind of board?</h3>
+                  <p className="text-xs text-foreground/50">Pick one or more — you can combine styles</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {BOARD_TYPES.map(bt => {
+                    const isSelected = selectedBoardTypes.includes(bt.id);
+                    return (
+                      <button key={bt.id} onClick={() => toggleBoardType(bt.id)}
+                        className={`flex items-start gap-2.5 px-3 py-3 rounded-xl text-left text-xs transition-all ${
+                          isSelected ? "bg-accent/10 text-accent border border-accent/20" : "bg-secondary/50 text-foreground/70 hover:bg-secondary border border-transparent"
+                        }`}>
+                        <span className="text-base mt-0.5">{bt.emoji}</span>
+                        <div>
+                          <span className="font-medium block">{bt.label}</span>
+                          <span className="text-[10px] text-foreground/40 leading-snug block">{bt.desc}</span>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button onClick={proceedFromTypeSelect} disabled={loadingQs}
+                    className="flex-1 px-4 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-40">
+                    {loadingQs ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /><span className="animate-pulse-slow">Thinking...</span></>
+                    ) : (
+                      <><Sparkles className="w-4 h-4" />Continue</>
+                    )}
+                  </button>
+                  <button onClick={() => setPhase("input")} className="px-4 py-3 rounded-xl border border-border text-sm text-foreground/60 hover:bg-secondary transition-colors">Back</button>
+                </div>
               </motion.div>
             )}
 
@@ -1239,6 +1323,8 @@ interface StickyNoteProps {
 
 function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isConnectSource, onPointerDown, onEdit, onUpdate, onDelete, canvasWidth, canvasHeight, displayWidth, displayHeight }: StickyNoteProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [resizing, setResizing] = useState(false);
+  const resizeStart = useRef({ x: 0, y: 0, w: 0, h: 0 });
 
   useEffect(() => {
     if (isEditing && textareaRef.current) { textareaRef.current.focus(); textareaRef.current.select(); }
@@ -1264,8 +1350,37 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
 
   const shapeClass = isCircle ? "rounded-full" : isDiamond ? "rotate-0" : isFrame ? "rounded-xl border-2 border-dashed" : isTextBlock ? "rounded-lg border-none shadow-none" : "rounded-xl";
   const bgColor = isFrame ? "transparent" : isTextBlock ? "transparent" : item.color || "#FFF9DB";
-  const minWidth = isCircle ? 100 : isDiamond ? 120 : isFrame ? 250 : isTextBlock ? 180 : isCentral ? 160 : 140;
-  const maxWidth = isFrame ? 400 : isTextBlock ? 320 : 220;
+  const defaultWidth = isCircle ? 100 : isDiamond ? 120 : isFrame ? 300 : isTextBlock ? 200 : isCentral ? 160 : 140;
+  const defaultHeight = isCircle ? 100 : isDiamond ? 120 : isFrame ? 200 : isTextBlock ? 60 : 100;
+  const itemW = item.width || defaultWidth;
+  const itemH = item.height || defaultHeight;
+
+  const handleResizeStart = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setResizing(true);
+    resizeStart.current = { x: e.clientX, y: e.clientY, w: itemW, h: itemH };
+    const onMove = (ev: PointerEvent) => {
+      const scale = displayWidth / canvasWidth;
+      const dw = (ev.clientX - resizeStart.current.x) / scale;
+      const dh = (ev.clientY - resizeStart.current.y) / scale;
+      onUpdate({
+        width: Math.max(60, resizeStart.current.w + dw),
+        height: Math.max(40, resizeStart.current.h + dh),
+      });
+    };
+    const onUp = () => {
+      setResizing(false);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
+
+  const scale = displayWidth / canvasWidth;
+  const scaledW = itemW * scale;
+  const scaledH = itemH * scale;
 
   return (
     <motion.div
@@ -1273,11 +1388,11 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
       animate={{ opacity: 1, scale: isDragging ? 1.05 : isConnectTarget ? 1.08 : 1, zIndex: isDragging ? 50 : isEditing ? 40 : isFrame ? 1 : 10 }}
       transition={{ delay: index * 0.03, duration: 0.2 }}
       className={`absolute group ${isDragging ? "cursor-grabbing" : isConnectTarget ? "cursor-pointer" : "cursor-move"}`}
-      style={{ left, top }}
+      style={{ left, top, width: scaledW, height: isDiamond ? scaledW : scaledH }}
       onPointerDown={onPointerDown}
       onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}>
       {isDiamond ? (
-        <div className="relative" style={{ width: minWidth, height: minWidth }}>
+        <div className="relative w-full h-full">
           <div className={`absolute inset-[15%] rotate-45 shadow-sm border transition-all ${
             isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
           } border-border/30 rounded-lg`} style={{ backgroundColor: bgColor }} />
@@ -1294,7 +1409,6 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           {item.connectedTo && item.connectedTo.length > 0 && (
             <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium z-20">{item.connectedTo.length}</div>
           )}
-          {/* Per-element color picker (diamond) */}
           {isEditing && (
             <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 border border-border/50 shadow-sm" onClick={(e) => e.stopPropagation()}>
               <input type="color" value={item.color || "#FFF9DB"} onChange={(e) => onUpdate({ color: e.target.value })}
@@ -1305,12 +1419,16 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20">
             <Trash2 className="w-2.5 h-2.5" />
           </button>
+          {/* Resize handle */}
+          <div onPointerDown={handleResizeStart}
+            className="absolute bottom-0 right-0 w-3 h-3 cursor-se-resize z-30 opacity-0 group-hover:opacity-60 transition-opacity"
+            style={{ background: "linear-gradient(135deg, transparent 50%, hsl(var(--accent)) 50%)", borderRadius: "0 0 4px 0" }} />
         </div>
       ) : (
-        <div className={`relative ${shapeClass} shadow-sm border transition-all ${
+        <div className={`relative w-full h-full ${shapeClass} shadow-sm border transition-all ${
           isEditing ? "ring-2 ring-accent/40 shadow-md" : isConnectSource ? "ring-2 ring-accent shadow-lg" : isConnectTarget ? "ring-1 ring-accent/30 shadow-md" : "hover:shadow-md"
         } ${isCentral ? "border-accent/30" : isFrame ? "border-accent/20" : isTextBlock ? "border-transparent" : "border-border/30"}`}
-          style={{ backgroundColor: bgColor, minWidth, maxWidth, minHeight: isFrame ? 150 : isCircle ? minWidth : undefined, aspectRatio: isCircle ? "1" : undefined }}>
+          style={{ backgroundColor: bgColor }}>
           <div className={`px-3 pt-2 flex items-center gap-1.5 ${isCircle ? "justify-center" : ""}`}>
             <span className="text-[9px] font-medium tracking-wider text-foreground/40 uppercase">{typeLabel}</span>
           </div>
@@ -1322,7 +1440,7 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           <div className="absolute -left-0.5 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-40 transition-opacity">
             <GripVertical className="w-3 h-3 text-foreground" />
           </div>
-          <div className={`p-3 pt-1 ${isCircle ? "flex items-center justify-center" : ""}`}>
+          <div className={`p-3 pt-1 overflow-hidden ${isCircle ? "flex items-center justify-center" : ""}`}>
             {isEditing ? (
               <textarea ref={textareaRef} value={item.content} onChange={(e) => onUpdate({ content: e.target.value })}
                 onKeyDown={(e) => { if (e.key === "Escape") onEdit(); }} onClick={(e) => e.stopPropagation()}
@@ -1335,7 +1453,6 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           {item.connectedTo && item.connectedTo.length > 0 && (
             <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium">{item.connectedTo.length}</div>
           )}
-          {/* Per-element color picker */}
           {isEditing && !isFrame && !isTextBlock && (
             <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 border border-border/50 shadow-sm" onClick={(e) => e.stopPropagation()}>
               <input type="color" value={item.color || "#FFF9DB"} onChange={(e) => onUpdate({ color: e.target.value })}
@@ -1346,6 +1463,10 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
             <Trash2 className="w-2.5 h-2.5" />
           </button>
+          {/* Resize handle */}
+          <div onPointerDown={handleResizeStart}
+            className="absolute bottom-0 right-0 w-3 h-3 cursor-se-resize z-30 opacity-0 group-hover:opacity-60 transition-opacity"
+            style={{ background: "linear-gradient(135deg, transparent 50%, hsl(var(--accent)) 50%)", borderRadius: "0 0 4px 0" }} />
         </div>
       )}
     </motion.div>
