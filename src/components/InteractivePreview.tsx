@@ -1077,10 +1077,9 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
     return () => window.removeEventListener("keydown", handleKey);
   }, [zoom, onZoomChange]);
 
-  // Middle-click or space+click panning
+  // Click-and-drag panning (left click on empty canvas, middle click, or alt+click)
   const handleContainerPointerDown = (e: React.PointerEvent) => {
-    // Middle mouse button (1) or space key held
-    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+    if (e.button === 1 || (e.button === 0 && e.altKey) || (e.button === 0 && !connectMode)) {
       e.preventDefault();
       setIsPanning(true);
       panStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
@@ -1151,7 +1150,7 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
   return (
     <div
       ref={containerRef}
-      className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : isPanning ? "cursor-grabbing" : "cursor-default"}`}
+      className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : isPanning ? "cursor-grabbing" : "cursor-grab"}`}
       style={{ width: "100%", height: "100%", minHeight: 400 }}
       onPointerDown={handleContainerPointerDown}
       onPointerMove={handleContainerPointerMove}
