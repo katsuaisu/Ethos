@@ -6,14 +6,27 @@ import { motion, AnimatePresence } from "framer-motion";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
+const STORAGE_KEY = "ethos-chat-history";
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
 
+function loadMessages(): Msg[] {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
+  } catch { return []; }
+}
+
 export default function AIChatPanel() {
-  const [messages, setMessages] = useState<Msg[]>([]);
+  const [messages, setMessages] = useState<Msg[]>(loadMessages);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Persist messages
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+  }, [messages]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -97,9 +110,13 @@ export default function AIChatPanel() {
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto scrollbar-thin px-4 py-3 space-y-4">
+    <div className="flex flex-col h-full overflow-hidden">
+      {/* Messages - fixed mobile scroll */}
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto overscroll-contain scrollbar-thin px-4 py-3 space-y-4"
+        style={{ minHeight: 0, WebkitOverflowScrolling: "touch" }}
+      >
         {messages.length === 0 && (
           <motion.div
             initial={{ opacity: 0, y: 12 }}
@@ -155,7 +172,7 @@ export default function AIChatPanel() {
       </div>
 
       {/* Input */}
-      <div className="px-4 pb-4 pt-2">
+      <div className="px-4 pb-4 pt-2 shrink-0">
         {messages.length > 0 && (
           <button
             onClick={() => setMessages([])}
@@ -174,7 +191,6 @@ export default function AIChatPanel() {
             placeholder="What's on your mind?"
             rows={1}
             className="flex-1 bg-transparent border-none outline-none resize-none text-sm py-1.5 px-2 placeholder:text-muted-foreground/60 min-h-[36px] max-h-[120px]"
-            style={{ fontFamily: "'Inter', sans-serif" }}
           />
           <button
             onClick={send}
