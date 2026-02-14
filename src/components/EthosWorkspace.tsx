@@ -22,9 +22,7 @@ export default function EthosWorkspace() {
 
   const handlePushToMiro = async (items: any[]) => {
     if (!miroBoardId) {
-      toast.error("Select a Miro board first", {
-        description: "Go to the Sync tab and select a board",
-      });
+      toast.error("Select a Miro board first", { description: "Go to the Sync tab and select a board" });
       setActiveTab("miro");
       return;
     }
@@ -32,9 +30,7 @@ export default function EthosWorkspace() {
       toast.loading("Pushing to Miro...");
       await pushItemsToMiro(miroBoardId, items);
       toast.dismiss();
-      toast.success("Pushed to Miro!", {
-        description: `${items.length} items added to your board`,
-      });
+      toast.success("Pushed to Miro!", { description: `${items.length} items added to your board` });
     } catch {
       toast.dismiss();
       toast.error("Failed to push to Miro");
@@ -44,7 +40,7 @@ export default function EthosWorkspace() {
   return (
     <div className="h-screen w-full bg-ambient flex flex-col overflow-hidden">
       {/* Header */}
-      <header className="px-6 py-4 flex items-center justify-between shrink-0">
+      <header className="px-4 lg:px-6 py-3 lg:py-4 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-primary-foreground" />
@@ -65,10 +61,10 @@ export default function EthosWorkspace() {
         )}
       </header>
 
-      {/* Main content area */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-0 overflow-hidden px-4 pb-4">
-        {/* Sidebar/Tabs area */}
-        <div className="w-full lg:w-[420px] xl:w-[480px] flex flex-col glass rounded-2xl overflow-hidden shrink-0 min-h-0 max-h-[calc(100vh-120px)] lg:max-h-none">
+      {/* Main: Desktop = side-by-side with expanded canvas, Mobile = stacked */}
+      <div className="flex-1 flex flex-col lg:flex-row gap-0 overflow-hidden px-3 lg:px-4 pb-3 lg:pb-4">
+        {/* Panel */}
+        <div className="w-full lg:w-[420px] xl:w-[480px] flex flex-col glass rounded-2xl overflow-hidden shrink-0 min-h-0 max-h-[60vh] lg:max-h-none">
           {/* Tab navigation */}
           <div className="flex border-b border-border/50 px-2 pt-2">
             {tabs.map((tab) => {
@@ -78,9 +74,7 @@ export default function EthosWorkspace() {
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
                   className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors rounded-t-lg ${
-                    activeTab === tab.id
-                      ? "text-foreground"
-                      : "text-muted-foreground hover:text-foreground/70"
+                    activeTab === tab.id ? "text-foreground" : "text-muted-foreground hover:text-foreground/70"
                   }`}
                 >
                   <Icon className="w-3.5 h-3.5" />
@@ -112,18 +106,15 @@ export default function EthosWorkspace() {
                 {activeTab === "image" && <ImageAnalyzer />}
                 {activeTab === "preview" && <InteractivePreview onPushToMiro={handlePushToMiro} />}
                 {activeTab === "miro" && (
-                  <MiroSyncPanel
-                    selectedBoardId={miroBoardId}
-                    onBoardSelected={setMiroBoardId}
-                  />
+                  <MiroSyncPanel selectedBoardId={miroBoardId} onBoardSelected={setMiroBoardId} />
                 )}
               </motion.div>
             </AnimatePresence>
           </div>
         </div>
 
-        {/* Canvas / Info area */}
-        <div className="flex-1 flex items-center justify-center p-8 min-h-[300px]">
+        {/* Canvas / Info area — expanded on desktop */}
+        <div className="flex-1 hidden lg:flex items-center justify-center p-8">
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -133,9 +124,7 @@ export default function EthosWorkspace() {
             <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-6">
               <Sparkles className="w-7 h-7 text-accent" />
             </div>
-            <h2 className="text-serif text-3xl lg:text-4xl mb-3">
-              Think freely.
-            </h2>
+            <h2 className="text-serif text-3xl lg:text-4xl mb-3">Think freely.</h2>
             <p className="text-muted-foreground text-sm leading-relaxed mb-6 max-w-sm mx-auto">
               Brain dump ideas, scan images for inspiration, preview layouts — then push it all to Miro with one click.
             </p>
