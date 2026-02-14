@@ -9,21 +9,21 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { imageBase64, prompt, analysisType } = await req.json();
+    const { imageBase64, prompt, analysisType, fileName, fileContent } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
     const systemPrompts: Record<string, string> = {
-      categorize: `You are a visual analysis expert. Analyze this image and return a JSON object with:
+      categorize: `You are a visual analysis expert. Analyze this image or document and return a JSON object with:
 {
-  "title": "What this image represents",
+  "title": "What this represents",
   "category": "Category name",
   "tags": ["tag1", "tag2", "tag3"],
   "description": "Brief description",
   "insights": ["Insight 1", "Insight 2"],
   "suggestedLayout": "grid|mindmap|timeline",
   "mindmap": {
-    "title": "Central concept from image",
+    "title": "Central concept",
     "nodes": [
       { "id": "1", "label": "Key theme 1", "children": [{ "id": "1.1", "label": "Detail" }] },
       { "id": "2", "label": "Key theme 2", "children": [{ "id": "2.1", "label": "Detail" }] }
@@ -51,6 +51,14 @@ Be insightful and creative. Return ONLY valid JSON.`,
           { type: "image_url", image_url: { url: imageBase64.startsWith("data:") ? imageBase64 : `data:image/jpeg;base64,${imageBase64}` } },
           { type: "text", text: prompt || "Analyze this image thoroughly." },
         ],
+      });
+    } else if (fileContent) {
+      // For non-image files, extract text content from the base64 data
+      const textContent = fileContent.includes(",") ? atob(fileContent.split(",")[1]) : fileContent;
+      const truncated = textContent.slice(0, 8000); // Limit to prevent token overflow
+      messages.push({
+        role: "user",
+        content: `${prompt || "Analyze this document thoroughly."}\n\nDocument name: ${fileName || "unknown"}\n\nDocument content:\n${truncated}`
       });
     } else {
       messages.push({ role: "user", content: prompt || "Analyze this content." });

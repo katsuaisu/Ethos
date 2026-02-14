@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { MessageSquare, Image, Layout, ArrowRightLeft, Sparkles } from "lucide-react";
 import AIChatPanel from "./AIChatPanel";
-import ImageAnalyzer from "./ImageAnalyzer";
+import ScanPanel from "./ScanPanel";
 import InteractivePreview from "./InteractivePreview";
 import MiroSyncPanel, { pushItemsToMiro } from "./MiroSyncPanel";
 import { toast } from "sonner";
@@ -110,7 +110,7 @@ export default function EthosWorkspace() {
         {/* Scan — full page */}
         <div className={`absolute inset-0 flex ${activeTab === "image" ? "" : "hidden"}`}>
           <div className="flex-1 max-w-2xl mx-auto">
-            <ImageAnalyzer onPaletteExtracted={handleExtractPalette} />
+            <ScanPanel onPaletteExtracted={handleExtractPalette} />
           </div>
           <ScanSidebar palette={sharedPalette} />
         </div>
