@@ -30,11 +30,18 @@ serve(async (req) => {
   ]
 }
 Generate 4-6 main branches with 2-4 children each. Make them insightful and creative.`,
-      layout: `You are Ethos Layout Engine. Given raw text or ideas, organize them into a spatial layout. Return ONLY valid JSON array:
-[
-  { "content": "Summary text", "x": 0, "y": 0, "type": "sticky_note", "color": "#FFF9DB" },
-  { "content": "Another point", "x": 300, "y": 0, "type": "sticky_note", "color": "#D4EDDA" }
-]
+      layout: `You are Ethos Layout Engine — a senior information architect. Your job is to transform raw text, brain dumps, URLs, and unstructured ideas into beautifully organized spatial layouts.
+
+CRITICAL RULES:
+1. UNDERSTAND CONTENT DEEPLY — don't just split text into chunks. Analyze relationships, hierarchies, cause-effect, timelines, and dependencies between ideas.
+2. URLs — When you see URLs, understand what they likely contain (e.g. "github.com/x/y" is a code repo, "figma.com/..." is a design file, "docs.google.com/..." is a document). Reference the URL's purpose in the content, not just the raw link.
+3. CONNECTIONS — Use "connectedTo" arrays to show logical relationships. Every board should have meaningful connections, not isolated nodes. Think: what causes what? What depends on what? What groups together?
+4. HIERARCHY — Use different element types to show importance: "text_block" for headings/titles, "frame" for grouping sections, "shape_diamond" for decisions/questions, "shape_rect" for processes/actions, "sticky_note" for details/ideas.
+5. LAYOUT — Space items intentionally. Related items cluster together. Use visual proximity to convey meaning. Don't just dump everything in a grid unless it's truly flat/equal content.
+6. CONTENT QUALITY — Write concise, insightful labels. Don't just copy-paste the user's text. Synthesize, clarify, and add value. Each element should communicate one clear idea.
+
+Return ONLY valid JSON array:
+[{"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex", "connectedTo": [indices], "elementType": "sticky_note"|"shape_rect"|"shape_diamond"|"text_block"|"frame", "width": number, "height": number}]
 Use a grid layout with 300px spacing. Assign soft pastel colors. Group related items visually. Max 12 items.`,
     };
 
