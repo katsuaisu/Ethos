@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useState, useCallback } from "react";
+import { motion } from "framer-motion";
 import { MessageSquare, Image, Layout, ArrowRightLeft, Sparkles } from "lucide-react";
 import AIChatPanel from "./AIChatPanel";
 import ImageAnalyzer from "./ImageAnalyzer";
@@ -20,7 +20,11 @@ export default function EthosWorkspace() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [miroBoardId, setMiroBoardId] = useState<string>("");
 
-  const handlePushToMiro = async (items: any[]) => {
+  // Shared state for importing scan data into preview
+  const [sharedPalette, setSharedPalette] = useState<Record<string, string> | null>(null);
+  const [sharedIdeas, setSharedIdeas] = useState<string[]>([]);
+
+  const handlePushToMiro = useCallback(async (items: any[]) => {
     if (!miroBoardId) {
       toast.error("Select a Miro board first", { description: "Go to the Sync tab and select a board" });
       setActiveTab("miro");
@@ -35,12 +39,20 @@ export default function EthosWorkspace() {
       toast.dismiss();
       toast.error("Failed to push to Miro");
     }
-  };
+  }, [miroBoardId]);
+
+  const handleExtractPalette = useCallback((palette: Record<string, string>) => {
+    setSharedPalette(palette);
+  }, []);
+
+  const handleShareIdeas = useCallback((ideas: string[]) => {
+    setSharedIdeas(ideas);
+  }, []);
 
   return (
     <div className="h-screen w-full bg-ambient flex flex-col overflow-hidden">
-      {/* Header */}
-      <header className="px-4 lg:px-6 py-3 lg:py-4 flex items-center justify-between shrink-0">
+      {/* Top nav bar */}
+      <header className="px-6 py-3 flex items-center justify-between border-b border-border/30 shrink-0">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
             <Sparkles className="w-4 h-4 text-primary-foreground" />
@@ -53,87 +65,134 @@ export default function EthosWorkspace() {
           </div>
         </div>
 
-        {miroBoardId && (
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
-            Connected to Miro
-          </div>
-        )}
+        {/* Center nav */}
+        <nav className="flex items-center gap-1 bg-secondary/50 rounded-xl p-1">
+          {tabs.map((tab) => {
+            const Icon = tab.icon;
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`relative flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-all ${
+                  isActive
+                    ? "bg-primary text-primary-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Icon className="w-4 h-4" />
+                <span className="hidden sm:inline">{tab.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+
+        <div className="flex items-center gap-3">
+          {miroBoardId && (
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <div className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
+              Miro connected
+            </div>
+          )}
+        </div>
       </header>
 
-      {/* Main: Desktop = side-by-side with expanded canvas, Mobile = stacked */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-0 overflow-hidden px-3 lg:px-4 pb-3 lg:pb-4">
-        {/* Panel */}
-        <div className="w-full lg:w-[420px] xl:w-[480px] flex flex-col glass rounded-2xl overflow-hidden shrink-0 min-h-0 max-h-[60vh] lg:max-h-none">
-          {/* Tab navigation */}
-          <div className="flex border-b border-border/50 px-2 pt-2">
-            {tabs.map((tab) => {
-              const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`relative flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors rounded-t-lg ${
-                    activeTab === tab.id ? "text-foreground" : "text-muted-foreground hover:text-foreground/70"
-                  }`}
-                >
-                  <Icon className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">{tab.label}</span>
-                  {activeTab === tab.id && (
-                    <motion.div
-                      layoutId="activeTab"
-                      className="absolute inset-x-0 bottom-0 h-[2px] bg-accent rounded-full"
-                      transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                    />
-                  )}
-                </button>
-              );
-            })}
+      {/* Full-page content — all tabs stay mounted, hidden with CSS */}
+      <div className="flex-1 overflow-hidden relative">
+        {/* Ideate — full page with chat left + sidebar right */}
+        <div className={`absolute inset-0 flex ${activeTab === "chat" ? "" : "hidden"}`}>
+          <div className="flex-1 max-w-3xl mx-auto">
+            <AIChatPanel onShareIdeas={handleShareIdeas} />
           </div>
-
-          {/* Tab content */}
-          <div className="flex-1 overflow-hidden">
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={activeTab}
-                initial={{ opacity: 0, x: 8 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -8 }}
-                transition={{ duration: 0.2 }}
-                className="h-full"
-              >
-                {activeTab === "chat" && <AIChatPanel />}
-                {activeTab === "image" && <ImageAnalyzer />}
-                {activeTab === "preview" && <InteractivePreview onPushToMiro={handlePushToMiro} />}
-                {activeTab === "miro" && (
-                  <MiroSyncPanel selectedBoardId={miroBoardId} onBoardSelected={setMiroBoardId} />
-                )}
-              </motion.div>
-            </AnimatePresence>
-          </div>
+          <IdeationSidebar sharedIdeas={sharedIdeas} />
         </div>
 
-        {/* Canvas / Info area — expanded on desktop */}
-        <div className="flex-1 hidden lg:flex items-center justify-center p-8">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.2 }}
-            className="text-center max-w-md"
-          >
-            <div className="w-16 h-16 rounded-2xl bg-accent/10 flex items-center justify-center mx-auto mb-6">
-              <Sparkles className="w-7 h-7 text-accent" />
+        {/* Scan — full page */}
+        <div className={`absolute inset-0 flex ${activeTab === "image" ? "" : "hidden"}`}>
+          <div className="flex-1 max-w-2xl mx-auto">
+            <ImageAnalyzer onPaletteExtracted={handleExtractPalette} />
+          </div>
+          <ScanSidebar palette={sharedPalette} />
+        </div>
+
+        {/* Preview — full page canvas */}
+        <div className={`absolute inset-0 ${activeTab === "preview" ? "" : "hidden"}`}>
+          <InteractivePreview
+            onPushToMiro={handlePushToMiro}
+            importedPalette={sharedPalette}
+            importedIdeas={sharedIdeas}
+          />
+        </div>
+
+        {/* Sync — full page */}
+        <div className={`absolute inset-0 ${activeTab === "miro" ? "" : "hidden"}`}>
+          <MiroSyncPanel selectedBoardId={miroBoardId} onBoardSelected={setMiroBoardId} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Sidebars ── */
+
+function IdeationSidebar({ sharedIdeas }: { sharedIdeas: string[] }) {
+  return (
+    <div className="hidden lg:flex w-72 xl:w-80 flex-col border-l border-border/30 p-5 gap-5 overflow-y-auto scrollbar-thin">
+      <div className="glass rounded-xl p-4">
+        <h4 className="text-serif text-sm mb-3">Layout DNA</h4>
+        <div className="flex items-center gap-3 p-2 rounded-lg bg-secondary/50">
+          <div className="w-8 h-8 rounded-lg bg-accent/10 flex items-center justify-center">
+            <Layout className="w-4 h-4 text-accent" />
+          </div>
+          <div>
+            <p className="text-xs font-medium text-foreground">Gardener / MindMap</p>
+            <p className="text-[10px] text-muted-foreground">Organic mindmap for connected ideas</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="glass rounded-xl p-4">
+        <h4 className="text-serif text-sm mb-3">Quick Stats</h4>
+        <div className="space-y-2.5">
+          {[
+            { label: "Active Ideas", value: sharedIdeas.length || "—" },
+            { label: "Saved Boards", value: "—" },
+            { label: "AI Suggestions", value: "—" },
+          ].map((s) => (
+            <div key={s.label} className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{s.label}</span>
+              <span className="font-medium text-foreground">{s.value}</span>
             </div>
-            <h2 className="text-serif text-3xl lg:text-4xl mb-3">Think freely.</h2>
-            <p className="text-muted-foreground text-sm leading-relaxed mb-6 max-w-sm mx-auto">
-              Brain dump ideas, scan images for inspiration, preview layouts — then push it all to Miro with one click.
-            </p>
-            <div className="flex flex-wrap gap-2 justify-center text-xs text-muted-foreground/70">
-              {["AI Ideation", "Image Analysis", "Mindmap Generation", "Layout Preview", "Miro Sync"].map((f) => (
-                <span key={f} className="bg-secondary/60 px-3 py-1.5 rounded-full">{f}</span>
-              ))}
-            </div>
-          </motion.div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ScanSidebar({ palette }: { palette: Record<string, string> | null }) {
+  return (
+    <div className="hidden lg:flex w-72 xl:w-80 flex-col border-l border-border/30 p-5 gap-5 overflow-y-auto scrollbar-thin">
+      {palette && (
+        <div className="glass rounded-xl p-4">
+          <h4 className="text-serif text-sm mb-3">Extracted Palette</h4>
+          <div className="grid grid-cols-3 gap-2">
+            {Object.entries(palette).map(([name, hex]) => (
+              <div key={name} className="text-center">
+                <div className="w-full aspect-square rounded-lg border border-border/50 mb-1" style={{ backgroundColor: hex }} />
+                <p className="text-[10px] text-muted-foreground capitalize">{name}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="glass rounded-xl p-4">
+        <h4 className="text-serif text-sm mb-3">Scan Tips</h4>
+        <div className="space-y-2 text-xs text-muted-foreground">
+          <p>• Upload moodboards to extract colors & fonts</p>
+          <p>• Analyze images for AI-generated mindmaps</p>
+          <p>• Extracted palettes auto-sync to Preview</p>
         </div>
       </div>
     </div>

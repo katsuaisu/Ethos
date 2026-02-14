@@ -41,7 +41,7 @@ function loadHistory(): ScanEntry[] {
   } catch { return []; }
 }
 
-export default function ImageAnalyzer({ onMindmapGenerated }: { onMindmapGenerated?: (data: any) => void }) {
+export default function ImageAnalyzer({ onMindmapGenerated, onPaletteExtracted }: { onMindmapGenerated?: (data: any) => void; onPaletteExtracted?: (palette: Record<string, string>) => void }) {
   const [preview, setPreview] = useState<string | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -91,6 +91,9 @@ export default function ImageAnalyzer({ onMindmapGenerated }: { onMindmapGenerat
       const data = await res.json();
       if (data.result) {
         setResult(data.result);
+        if (data.result.palette && onPaletteExtracted) {
+          onPaletteExtracted(data.result.palette);
+        }
         if (data.result.mindmap && onMindmapGenerated) {
           onMindmapGenerated(data.result.mindmap);
         }
