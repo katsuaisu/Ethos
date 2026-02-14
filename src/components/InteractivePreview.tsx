@@ -851,7 +851,8 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
 
             {/* Phase: Board */}
             {phase === "board" && items.length > 0 && (
-              <motion.div key="board" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="h-full flex flex-col gap-3">
+              <motion.div key="board" initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} className="h-full flex flex-col gap-3 min-h-0">
+                <div className="flex-1 min-h-0 relative">
                 <InteractiveBoard
                   items={items}
                   layoutType={layoutType}
@@ -869,9 +870,10 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                   connectFrom={connectFrom}
                   onConnectClick={handleConnectClick}
                 />
+                </div>
 
                 {/* Tailor with AI */}
-                <div className="glass rounded-xl p-3 flex gap-2 items-center">
+                <div className="glass rounded-xl p-3 flex gap-2 items-center shrink-0">
                   <Wand2 className="w-4 h-4 text-accent shrink-0" />
                   <input
                     value={tailorPrompt}
@@ -890,7 +892,7 @@ ${colorInstructions}. Max 10 items. Each item connects to previous.`,
                 </div>
 
                 {/* Actions */}
-                <div className="flex gap-2 flex-wrap">
+                <div className="flex gap-2 flex-wrap shrink-0">
                   <button
                     onClick={() => onPushToMiro?.(items)}
                     className="px-5 py-2.5 rounded-xl bg-primary text-primary-foreground text-xs font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
