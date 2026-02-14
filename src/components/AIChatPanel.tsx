@@ -1,46 +1,115 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Send, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { Send, Loader2, Sparkles, Trash2, Plus, FolderOpen, Save } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
-const STORAGE_KEY = "ethos-chat-history";
+interface ChatSession {
+  id: string;
+  name: string;
+  messages: Msg[];
+  date: string;
+}
+
+const SESSIONS_KEY = "ethos-chat-sessions";
+const ACTIVE_KEY = "ethos-chat-active";
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
 
-function loadMessages(): Msg[] {
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved ? JSON.parse(saved) : [];
-  } catch { return []; }
+function loadSessions(): ChatSession[] {
+  try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]"); } catch { return []; }
+}
+
+function loadActiveId(): string | null {
+  try { return localStorage.getItem(ACTIVE_KEY); } catch { return null; }
 }
 
 export default function AIChatPanel() {
-  const [messages, setMessages] = useState<Msg[]>(loadMessages);
+  const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
+  const [activeId, setActiveId] = useState<string | null>(loadActiveId);
+  const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [showSessions, setShowSessions] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Persist messages
+  // Load active session messages
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-  }, [messages]);
+    if (activeId) {
+      const session = sessions.find(s => s.id === activeId);
+      if (session) setMessages(session.messages);
+    }
+  }, [activeId]);
+
+  // Persist sessions
+  useEffect(() => {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions.slice(0, 30)));
+  }, [sessions]);
 
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
+    if (activeId) localStorage.setItem(ACTIVE_KEY, activeId);
+  }, [activeId]);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
+
+  // Auto-save current messages to active session
+  useEffect(() => {
+    if (activeId && messages.length > 0) {
+      setSessions(prev => prev.map(s => s.id === activeId ? { ...s, messages, date: new Date().toISOString() } : s));
+    }
+  }, [messages, activeId]);
+
+  const saveCurrentChat = () => {
+    const name = messages.find(m => m.role === "user")?.content.slice(0, 40) || "Untitled";
+    if (activeId) {
+      setSessions(prev => prev.map(s => s.id === activeId ? { ...s, name, messages, date: new Date().toISOString() } : s));
+    } else {
+      const id = Date.now().toString();
+      const session: ChatSession = { id, name, messages, date: new Date().toISOString() };
+      setSessions(prev => [session, ...prev]);
+      setActiveId(id);
+    }
+  };
+
+  const newChat = () => {
+    // Auto-save current if has messages
+    if (messages.length > 0 && !activeId) saveCurrentChat();
+    setMessages([]);
+    setActiveId(null);
+    setShowSessions(false);
+  };
+
+  const loadChat = (session: ChatSession) => {
+    if (messages.length > 0 && !activeId) saveCurrentChat();
+    setMessages(session.messages);
+    setActiveId(session.id);
+    setShowSessions(false);
+  };
+
+  const deleteSession = (id: string) => {
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (activeId === id) { setMessages([]); setActiveId(null); }
+  };
 
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || isLoading) return;
     setInput("");
     const userMsg: Msg = { role: "user", content: text };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
+
+    // Auto-create session on first message
+    if (!activeId && messages.length === 0) {
+      const id = Date.now().toString();
+      const session: ChatSession = { id, name: text.slice(0, 40), messages: [userMsg], date: new Date().toISOString() };
+      setSessions(prev => [session, ...prev]);
+      setActiveId(id);
+    }
 
     let assistantSoFar = "";
     const allMessages = [...messages, userMsg];
@@ -80,7 +149,7 @@ export default function AIChatPanel() {
             const content = parsed.choices?.[0]?.delta?.content;
             if (content) {
               assistantSoFar += content;
-              setMessages((prev) => {
+              setMessages(prev => {
                 const last = prev[prev.length - 1];
                 if (last?.role === "assistant") {
                   return prev.map((m, i) => i === prev.length - 1 ? { ...m, content: assistantSoFar } : m);
@@ -96,33 +165,56 @@ export default function AIChatPanel() {
       }
     } catch (e) {
       console.error(e);
-      setMessages((prev) => [...prev, { role: "assistant", content: "Sorry, something went wrong. Please try again." }]);
+      setMessages(prev => [...prev, { role: "assistant", content: "Sorry, something went wrong. Please try again." }]);
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, messages]);
+  }, [input, isLoading, messages, activeId]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      send();
-    }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      {/* Messages - fixed mobile scroll */}
-      <div
-        ref={scrollRef}
-        className="flex-1 overflow-y-auto overscroll-contain scrollbar-thin px-4 py-3 space-y-4"
-        style={{ minHeight: 0, WebkitOverflowScrolling: "touch" }}
-      >
+      {/* Session bar */}
+      <div className="flex items-center gap-2 px-4 py-2 border-b border-border/50 shrink-0">
+        <button onClick={() => setShowSessions(!showSessions)} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors">
+          <FolderOpen className="w-3 h-3" />
+          Chats
+          {sessions.length > 0 && <span className="text-[10px] bg-secondary rounded-full px-1.5">{sessions.length}</span>}
+        </button>
+        <button onClick={newChat} className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors ml-auto">
+          <Plus className="w-3 h-3" />
+          New
+        </button>
+      </div>
+
+      {/* Session list */}
+      <AnimatePresence>
+        {showSessions && sessions.length > 0 && (
+          <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden border-b border-border/50">
+            <div className="px-4 py-2 space-y-1 max-h-[150px] overflow-y-auto scrollbar-thin">
+              {sessions.map(s => (
+                <div key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-colors ${activeId === s.id ? "bg-accent/10" : "bg-secondary/50 hover:bg-secondary"}`}>
+                  <button onClick={() => loadChat(s)} className="flex-1 text-left min-w-0">
+                    <span className="truncate block text-foreground">{s.name}</span>
+                    <span className="text-[10px] text-muted-foreground/60">{new Date(s.date).toLocaleDateString()}</span>
+                  </button>
+                  <button onClick={() => deleteSession(s.id)} className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0">
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain scrollbar-thin px-4 py-3 space-y-4" style={{ minHeight: 0, WebkitOverflowScrolling: "touch" }}>
         {messages.length === 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 12 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="flex flex-col items-center justify-center h-full text-center py-16"
-          >
+          <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center justify-center h-full text-center py-16">
             <div className="w-12 h-12 rounded-full bg-accent/10 flex items-center justify-center mb-4">
               <Sparkles className="w-5 h-5 text-accent" />
             </div>
@@ -135,24 +227,10 @@ export default function AIChatPanel() {
 
         <AnimatePresence initial={false}>
           {messages.map((msg, i) => (
-            <motion.div
-              key={i}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.25 }}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
-              <div
-                className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground rounded-br-md"
-                    : "glass rounded-bl-md"
-                }`}
-              >
+            <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${msg.role === "user" ? "bg-primary text-primary-foreground rounded-br-md" : "glass rounded-bl-md"}`}>
                 {msg.role === "assistant" ? (
-                  <div className="prose-ethos">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                  </div>
+                  <div className="prose-ethos"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></div>
                 ) : (
                   <p className="whitespace-pre-wrap">{msg.content}</p>
                 )}
@@ -174,12 +252,9 @@ export default function AIChatPanel() {
       {/* Input */}
       <div className="px-4 pb-4 pt-2 shrink-0">
         {messages.length > 0 && (
-          <button
-            onClick={() => setMessages([])}
-            className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-2"
-          >
-            <Trash2 className="w-3 h-3" />
-            Clear chat
+          <button onClick={newChat} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-2">
+            <Plus className="w-3 h-3" />
+            New chat
           </button>
         )}
         <div className="glass rounded-xl flex items-end gap-2 p-2">
