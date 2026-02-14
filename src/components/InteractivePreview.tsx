@@ -1178,7 +1178,7 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
 
   return (
     <div ref={containerRef}
-      className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : isPanning ? "cursor-grabbing" : "cursor-grab"}`}
+      className={`glass rounded-xl relative overflow-hidden select-none ${connectMode ? "cursor-crosshair" : isPanning ? "cursor-grabbing" : "cursor-default"}`}
       style={{ width: "100%", height: "100%", minHeight: 400 }}
       onPointerDown={handleContainerPointerDown} onPointerMove={handleContainerPointerMove} onPointerUp={handleContainerPointerUp}
       onClick={() => { if (!connectMode) onEditIdx(null); }}>
@@ -1272,7 +1272,7 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
       initial={{ opacity: 0, scale: 0.8 }}
       animate={{ opacity: 1, scale: isDragging ? 1.05 : isConnectTarget ? 1.08 : 1, zIndex: isDragging ? 50 : isEditing ? 40 : isFrame ? 1 : 10 }}
       transition={{ delay: index * 0.03, duration: 0.2 }}
-      className={`absolute group ${isDragging ? "cursor-grabbing" : isConnectTarget ? "cursor-pointer" : "cursor-grab"}`}
+      className={`absolute group ${isDragging ? "cursor-grabbing" : isConnectTarget ? "cursor-pointer" : "cursor-move"}`}
       style={{ left, top }}
       onPointerDown={onPointerDown}
       onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }}>
@@ -1293,6 +1293,14 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           </div>
           {item.connectedTo && item.connectedTo.length > 0 && (
             <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium z-20">{item.connectedTo.length}</div>
+          )}
+          {/* Per-element color picker (diamond) */}
+          {isEditing && (
+            <div className="absolute -bottom-3 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 border border-border/50 shadow-sm" onClick={(e) => e.stopPropagation()}>
+              <input type="color" value={item.color || "#FFF9DB"} onChange={(e) => onUpdate({ color: e.target.value })}
+                className="w-5 h-5 border-none cursor-pointer rounded-full" title="Change color" />
+              <span className="text-[8px] text-foreground/40">color</span>
+            </div>
           )}
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity z-20">
             <Trash2 className="w-2.5 h-2.5" />
@@ -1326,6 +1334,14 @@ function StickyNote({ item, index, isEditing, isDragging, isConnectTarget, isCon
           </div>
           {item.connectedTo && item.connectedTo.length > 0 && (
             <div className="absolute -bottom-1.5 -right-1.5 w-4 h-4 rounded-full bg-accent/20 text-accent text-[8px] flex items-center justify-center font-medium">{item.connectedTo.length}</div>
+          )}
+          {/* Per-element color picker */}
+          {isEditing && !isFrame && !isTextBlock && (
+            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-background/90 backdrop-blur-sm rounded-full px-2 py-1 border border-border/50 shadow-sm" onClick={(e) => e.stopPropagation()}>
+              <input type="color" value={item.color || "#FFF9DB"} onChange={(e) => onUpdate({ color: e.target.value })}
+                className="w-5 h-5 border-none cursor-pointer rounded-full" title="Change color" />
+              <span className="text-[8px] text-foreground/40">color</span>
+            </div>
           )}
           <button onClick={(e) => { e.stopPropagation(); onDelete(); }} className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-destructive text-destructive-foreground flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
             <Trash2 className="w-2.5 h-2.5" />
