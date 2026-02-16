@@ -58,9 +58,16 @@ const ACCENT_PRESETS = [
   { name: "Red", hsl: "0 70% 52%" },
 ];
 
+const PREVIEW_STORAGE_KEY = "ethos-preview-sessions";
+
+function loadPreviewSessions() {
+  try { return JSON.parse(localStorage.getItem(PREVIEW_STORAGE_KEY) || "[]"); } catch { return []; }
+}
+
 export default function EthosWorkspace() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [miroBoardId, setMiroBoardId] = useState<string>("");
+  const [previewSessions, setPreviewSessions] = useState(loadPreviewSessions);
   const [accentHsl, setAccentHsl] = useState<string>(() => {
     try { return localStorage.getItem(ACCENT_KEY) || DEFAULT_ACCENT; } catch { return DEFAULT_ACCENT; }
   });
@@ -68,6 +75,11 @@ export default function EthosWorkspace() {
   // Shared state for importing scan data into preview
   const [sharedPalette, setSharedPalette] = useState<Record<string, string> | null>(null);
   const [sharedIdeas, setSharedIdeas] = useState<string[]>([]);
+
+  // Refresh preview sessions when tab changes
+  useEffect(() => {
+    if (activeTab === "miro") setPreviewSessions(loadPreviewSessions());
+  }, [activeTab]);
 
   // Apply accent color to CSS
   useEffect(() => {
@@ -194,7 +206,7 @@ export default function EthosWorkspace() {
 
         {/* Sync — full page */}
         <div className={`absolute inset-0 ${activeTab === "miro" ? "" : "hidden"}`}>
-          <MiroSyncPanel selectedBoardId={miroBoardId} onBoardSelected={setMiroBoardId} />
+          <MiroSyncPanel selectedBoardId={miroBoardId} onBoardSelected={setMiroBoardId} previewSessions={previewSessions} />
         </div>
       </div>
     </div>
