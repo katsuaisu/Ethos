@@ -34,26 +34,10 @@ const MIRO_SPACING_X = 320;
 const MIRO_SPACING_Y = 280;
 const MIRO_MAX_CONTENT_LEN = 200;
 
-// Map our element types to Miro primitives — STRICT: no element may be dropped
-function mapElementType(elementType?: string, type?: string): "sticky_note" | "shape" {
-  switch (elementType || type) {
-    case "sticky_note":
-    case "leaf":
-    case "branch":
-      return "sticky_note";
-    case "shape_rect":
-    case "shape_circle":
-    case "shape_diamond":
-    case "frame":
-    case "text_block":
-    case "central":
-    case "milestone":
-    case "event":
-      return "shape";
-    default:
-      // FALLBACK: never silently drop — map unknown types to sticky_note
-      return "sticky_note";
-  }
+// Map ALL element types to sticky_note for reliable Miro export
+function mapElementType(_elementType?: string, _type?: string): "sticky_note" | "shape" {
+  // All elements export as sticky notes for maximum compatibility
+  return "sticky_note";
 }
 
 // Miro color palette

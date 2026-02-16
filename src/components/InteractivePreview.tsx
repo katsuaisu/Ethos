@@ -1,8 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame, Upload, Edit3, ToggleLeft } from "lucide-react";
+import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame, Upload, Edit3 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Slider } from "./ui/slider";
-import { Switch } from "./ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { toast } from "sonner";
 import ConvertDialog from "./ConvertDialog";
@@ -29,6 +28,7 @@ const BOARD_TYPES = [
 ];
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
+const CHAT_SESSIONS_KEY = "ethos-chat-sessions";
 const STORAGE_KEY = "ethos-preview-sessions";
 const SCAN_STORAGE_KEY = "ethos-scan-history";
 
@@ -60,6 +60,13 @@ interface PreviewSession {
   gridDensity?: number;
 }
 
+interface ChatSession {
+  id: string;
+  name: string;
+  messages: { role: string; content: string }[];
+  date: string;
+}
+
 interface ScanEntry {
   id: string;
   preview: string;
@@ -68,6 +75,10 @@ interface ScanEntry {
   date: string;
   fileName?: string;
   fileType?: string;
+}
+
+function loadChatSessions(): ChatSession[] {
+  try { return JSON.parse(localStorage.getItem(CHAT_SESSIONS_KEY) || "[]"); } catch { return []; }
 }
 
 interface PreviewProps {
@@ -176,13 +187,17 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const [scanHistory, setScanHistory] = useState<ScanEntry[]>(loadScanHistory);
   const [showScanImport, setShowScanImport] = useState(false);
 
-  // Integration toggles
-  const [useChatIdeas, setUseChatIdeas] = useState(true);
-  const [useScanData, setUseScanData] = useState(true);
+  // Per-session selectors for chat and scan imports
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(loadChatSessions);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
+  const [selectedScanId, setSelectedScanId] = useState<string | null>(null);
+  const [importingChat, setImportingChat] = useState(false);
 
-  // Effective imported data based on toggles
-  const effectiveIdeas = useChatIdeas ? importedIdeas : undefined;
-  const effectivePalette = useScanData ? importedPalette : null;
+  // Effective imported data based on selections
+  const selectedChat = chatSessions.find(s => s.id === selectedChatId);
+  const selectedScan = scanHistory.find(s => s.id === selectedScanId);
+  const effectiveIdeas = selectedChat ? selectedChat.messages.filter(m => m.role === "user").map(m => m.content) : undefined;
+  const effectivePalette = selectedScan?.result?.palette ? selectedScan.result.palette : (importedPalette || null);
 
   // Follow-up questions flow
   const [phase, setPhase] = useState<Phase>("input");
@@ -199,9 +214,12 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [lastSaved, setLastSaved] = useState<Date | null>(null);
 
-  // Refresh scan history when tab focuses
+  // Refresh scan history and chat sessions when tab focuses
   useEffect(() => {
-    const refresh = () => setScanHistory(loadScanHistory());
+    const refresh = () => {
+      setScanHistory(loadScanHistory());
+      setChatSessions(loadChatSessions());
+    };
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, []);
@@ -264,6 +282,44 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     toast.success(`Created new board with ${effectiveIdeas.length} ideas`);
   };
 
+  // AI-generate board from a selected chat session
+  const importChatAsBoard = useCallback(async () => {
+    if (!selectedChat) return;
+    setImportingChat(true);
+    try {
+      const chatContent = selectedChat.messages.map(m => `${m.role === "user" ? "User" : "AI"}: ${m.content}`).join("\n\n");
+      const paletteColors = getActivePalette();
+      const cols = gridDensity + 1;
+      const spacingX = Math.floor(canvasSize.w / (cols + 0.5));
+
+      const prompt = `Analyze this chat conversation and create the best visual board layout from it. Extract the key ideas, decisions, questions, and action items. Organize them spatially.\n\nChat content:\n${chatContent}\n\nReturn ONLY a valid JSON array. Each item: {"content": "text", "x": number, "y": number, "type": "sticky_note", "color": "#hex", "connectedTo": [indices], "elementType": "sticky_note", "width": 140, "height": 100}\nUse these colors: ${paletteColors.join(", ")}. Start x at 40, spacing ${spacingX}px horizontally, 180px vertically. Max 12 items. Show connections between related ideas.`;
+
+      const resp = await fetch(CHAT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}` },
+        body: JSON.stringify({ messages: [{ role: "user", content: prompt }], mode: "layout" }),
+      });
+      if (!resp.ok || !resp.body) throw new Error("Failed");
+      const full = await readStream(resp);
+      const cleaned = full.replace(/```json/g, "").replace(/```/g, "").trim();
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        setActiveSessionId(null);
+        setInput(`Board from "${selectedChat.name}"`);
+        setItems(parsed);
+        setPhase("board");
+        toast.success(`Created board with ${parsed.length} items from chat`);
+      } else {
+        toast.error("AI returned empty board");
+      }
+    } catch (e) {
+      console.error(e);
+      toast.error("Failed to generate board from chat");
+    } finally {
+      setImportingChat(false);
+    }
+  }, [selectedChat, getActivePalette, gridDensity, canvasSize]);
+
   // Import scan entry content into board — ALWAYS creates a NEW board
   const importScanEntry = (entry: ScanEntry) => {
     const palette = getActivePalette();
@@ -310,7 +366,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
 
   const applyScannedPalette = useCallback(() => {
     if (!effectivePalette) return;
-    const colors = Object.values(effectivePalette);
+    const colors = Object.values(effectivePalette) as string[];
     setCustomPalette(colors);
     applyTheme(colors, "Scanned Palette");
   }, [effectivePalette, applyTheme]);
@@ -720,64 +776,59 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
             </AnimatePresence>
           </div>
 
-          {/* Integration Toggles */}
+          {/* Integration Selectors */}
           <div>
-            <h4 className="text-serif text-sm mb-3 text-foreground">Integrations</h4>
-            <div className="space-y-3">
-              {/* Chat ideas toggle */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <MessageSquare className="w-3.5 h-3.5 text-accent shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-foreground">Chat Ideas</p>
-                    <p className="text-[10px] text-foreground/50 truncate">
-                      {importedIdeas && importedIdeas.length > 0 ? `${importedIdeas.length} ideas available` : "No ideas yet"}
-                    </p>
-                  </div>
-                </div>
-                <Switch 
-                  checked={useChatIdeas} 
-                  onCheckedChange={setUseChatIdeas}
-                  disabled={!importedIdeas || importedIdeas.length === 0}
-                />
-              </div>
-
-              {/* Scan data toggle */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 min-w-0">
-                  <Palette className="w-3.5 h-3.5 text-accent shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-foreground">Scan Palette</p>
-                    <p className="text-[10px] text-foreground/50 truncate">
-                      {importedPalette ? `${Object.keys(importedPalette).length} colors extracted` : "No palette yet"}
-                    </p>
-                  </div>
-                </div>
-                <Switch 
-                  checked={useScanData} 
-                  onCheckedChange={setUseScanData}
-                  disabled={!importedPalette}
-                />
-              </div>
+            <h4 className="text-serif text-sm mb-3 text-foreground">Import from Chat</h4>
+            <div className="space-y-2">
+              <select
+                value={selectedChatId || ""}
+                onChange={(e) => setSelectedChatId(e.target.value || null)}
+                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-2.5 py-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-accent/40"
+              >
+                <option value="">None</option>
+                {chatSessions.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} ({new Date(s.date).toLocaleDateString()})</option>
+                ))}
+              </select>
+              {selectedChat && (
+                <button
+                  onClick={importChatAsBoard}
+                  disabled={importingChat}
+                  className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-accent/10 text-xs text-accent font-medium hover:bg-accent/15 transition-colors disabled:opacity-50"
+                >
+                  {importingChat ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+                  {importingChat ? "Generating board..." : `AI Generate from "${selectedChat.name}"`}
+                </button>
+              )}
             </div>
 
-            {/* Import action buttons — only show when toggles are on */}
-            {((effectiveIdeas && effectiveIdeas.length > 0) || effectivePalette) && (
-              <div className="mt-3 space-y-1.5">
-                {effectiveIdeas && effectiveIdeas.length > 0 && (
-                  <button onClick={importIdeas} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
+            <h4 className="text-serif text-sm mb-2 mt-4 text-foreground">Import from Scan</h4>
+            <div className="space-y-2">
+              <select
+                value={selectedScanId || ""}
+                onChange={(e) => setSelectedScanId(e.target.value || null)}
+                className="w-full bg-secondary/50 border border-border/50 rounded-lg px-2.5 py-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-accent/40"
+              >
+                <option value="">None</option>
+                {scanHistory.map(s => (
+                  <option key={s.id} value={s.id}>{s.result?.title || s.fileName || "Scan"} ({new Date(s.date).toLocaleDateString()})</option>
+                ))}
+              </select>
+              {selectedScan && (
+                <div className="space-y-1.5">
+                  <button onClick={() => importScanEntry(selectedScan)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
                     <Import className="w-3 h-3 text-accent" />
-                    Import {effectiveIdeas.length} ideas from chat
+                    Import scan to board
                   </button>
-                )}
-                {effectivePalette && (
-                  <button onClick={applyScannedPalette} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
-                    <Palette className="w-3 h-3 text-accent" />
-                    Apply scanned palette
-                  </button>
-                )}
-              </div>
-            )}
+                  {selectedScan.result?.palette && (
+                    <button onClick={applyScannedPalette} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
+                      <Palette className="w-3 h-3 text-accent" />
+                      Apply scan palette
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Convert — in left sidebar */}
@@ -932,11 +983,11 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
                   {effectivePalette && (
                     <p className="text-xs text-accent mt-1">✦ Moodboard palette will be applied</p>
                   )}
-                  {importedIdeas && importedIdeas.length > 0 && !useChatIdeas && (
-                    <p className="text-xs text-foreground/40 mt-2">Chat ideas available but disabled</p>
+                  {!selectedChatId && importedIdeas && importedIdeas.length > 0 && (
+                    <p className="text-xs text-foreground/40 mt-2">Select a chat session in sidebar to import ideas</p>
                   )}
-                  {importedPalette && !useScanData && (
-                    <p className="text-xs text-foreground/40 mt-1">Scan palette available but disabled</p>
+                  {!selectedScanId && importedPalette && (
+                    <p className="text-xs text-foreground/40 mt-1">Select a scan session in sidebar to apply palette</p>
                   )}
                 </div>
                 <textarea
