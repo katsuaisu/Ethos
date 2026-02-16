@@ -101,6 +101,13 @@ export default function EthosWorkspace() {
     setSharedIdeas(ideas);
   }, []);
 
+  const handleTransformToBoard = useCallback((content: string) => {
+    // Send content to Preview tab as imported ideas
+    setSharedIdeas(prev => [...prev, content]);
+    setActiveTab("preview");
+    toast.success("Content sent to Preview — use it to generate a board");
+  }, []);
+
   return (
     <div className="h-screen w-full bg-ambient flex flex-col overflow-hidden">
       {/* Top nav bar */}
@@ -157,7 +164,7 @@ export default function EthosWorkspace() {
         {/* Ideate — full page with chat left + sidebar right */}
         <div className={`absolute inset-0 flex ${activeTab === "chat" ? "" : "hidden"}`}>
           <div className="flex-1 max-w-3xl mx-auto">
-            <AIChatPanel onShareIdeas={handleShareIdeas} />
+            <AIChatPanel onShareIdeas={handleShareIdeas} onTransformToBoard={handleTransformToBoard} />
           </div>
           <IdeationSidebar sharedIdeas={sharedIdeas} accentHsl={accentHsl} onAccentChange={setAccentHsl} />
         </div>

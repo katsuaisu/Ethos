@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Loader2, ArrowDownLeft, CheckCircle2, AlertCircle, ArrowUpRight, Folder, Clock, LogIn, LogOut, ExternalLink } from "lucide-react";
+import { convertToMiroItems } from "@/lib/miroCompat";
 import { motion, AnimatePresence } from "framer-motion";
 
 const MIRO_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/miro-sync`;
@@ -365,10 +366,13 @@ export async function pushItemsToMiro(boardId: string, items: any[]) {
   };
   if (token) headers["x-miro-token"] = token;
 
+  // Use Miro compatibility layer: normalize layout, simplify connectors, resolve collisions
+  const miroItems = convertToMiroItems(items);
+
   const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/miro-sync`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ action: "push-items", boardId, items }),
+    body: JSON.stringify({ action: "push-items", boardId, items: miroItems }),
   });
   return res.json();
 }
