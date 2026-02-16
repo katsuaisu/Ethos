@@ -239,7 +239,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     return theme ? theme.colors : STICKY_COLORS.map(c => c.hex);
   }, [customPalette, activeTheme, importedPalette]);
 
-  // Import ideas from Ideation tab
+  // Import ideas from Ideation tab — ALWAYS creates a NEW board
   const importIdeas = () => {
     if (!importedIdeas || importedIdeas.length === 0) return;
     const palette = getActivePalette();
@@ -247,12 +247,15 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
       content: idea, x: 0, y: 0, type: "sticky_note", color: palette[i % palette.length],
     }));
     const organized = organizeGrid(newItems, gridDensity, canvasSize.w);
-    setItems(prev => [...prev, ...organized]);
-    if (phase !== "board") setPhase("board");
-    toast.success(`Imported ${importedIdeas.length} ideas`);
+    // Create new board — never merge into existing
+    setActiveSessionId(null);
+    setInput("Imported ideas");
+    setItems(organized);
+    setPhase("board");
+    toast.success(`Created new board with ${importedIdeas.length} ideas`);
   };
 
-  // Import scan entry content into board
+  // Import scan entry content into board — ALWAYS creates a NEW board
   const importScanEntry = (entry: ScanEntry) => {
     const palette = getActivePalette();
     const newItems: LayoutItem[] = [];
@@ -270,18 +273,21 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     const organized = layoutType === "mindmap"
       ? organizeMindmap(newItems, canvasSize.w, canvasSize.h)
       : organizeGrid(newItems, gridDensity, canvasSize.w);
-    setItems(prev => [...prev, ...organized]);
-    if (phase !== "board") setPhase("board");
+    // Create new board — never merge into existing
+    setActiveSessionId(null);
+    setInput(entry.result.title || entry.fileName || "Imported scan");
+    setItems(organized);
+    setPhase("board");
     setShowScanImport(false);
 
-    // If scan has a palette, offer to apply it
+    // If scan has a palette, apply it
     if (r.palette) {
       const colors = Object.values(r.palette) as string[];
       setCustomPalette(colors);
       setActiveTheme("Custom");
     }
 
-    toast.success(`Imported "${entry.result.title || entry.fileName || "scan"}" to board`);
+    toast.success(`Created new board from "${entry.result.title || entry.fileName || "scan"}"`);
   };
 
   // Apply a color theme to all items
@@ -479,6 +485,8 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
       const cleaned = full.replace(/```json/g, "").replace(/```/g, "").trim();
       const parsed = JSON.parse(cleaned);
       const newItems = Array.isArray(parsed) ? parsed : [];
+      // Always write to a fresh board context — never merge with previous
+      setActiveSessionId(null);
       setItems(newItems);
       setPhase("board");
       setStatus("");

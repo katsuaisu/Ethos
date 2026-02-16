@@ -84,9 +84,15 @@ export default function EthosWorkspace() {
     }
     try {
       toast.loading("Pushing to Miro...");
-      await pushItemsToMiro(miroBoardId, items);
+      const result = await pushItemsToMiro(miroBoardId, items);
       toast.dismiss();
-      toast.success("Pushed to Miro!", { description: `${items.length} items added to your board` });
+      if (result.success) {
+        toast.success(`Pushed to Miro!`, { description: `${result.created}/${result.expected} items created` });
+      } else if (result.created > 0) {
+        toast.warning(`Partial Miro export`, { description: `${result.created}/${result.expected} items. ${result.errors.length} failed.` });
+      } else {
+        toast.error("Miro export failed", { description: result.errors[0] || "Unknown error" });
+      }
     } catch {
       toast.dismiss();
       toast.error("Failed to push to Miro");
@@ -102,10 +108,10 @@ export default function EthosWorkspace() {
   }, []);
 
   const handleTransformToBoard = useCallback((content: string) => {
-    // Send content to Preview tab as imported ideas
-    setSharedIdeas(prev => [...prev, content]);
+    // Replace shared ideas (don't accumulate) — each transform creates fresh context
+    setSharedIdeas([content]);
     setActiveTab("preview");
-    toast.success("Content sent to Preview — use it to generate a board");
+    toast.success("Content sent to Preview — it will create a new board");
   }, []);
 
   return (
