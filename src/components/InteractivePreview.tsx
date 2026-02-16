@@ -1,7 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame, Upload, Edit3 } from "lucide-react";
+import { Loader2, Sparkles, Layout, GitBranch, Clock, RotateCcw, GripVertical, Plus, Trash2, MessageSquare, Save, FolderOpen, ZoomIn, ZoomOut, Maximize2, Minimize2, Import, Link2, Sliders, Palette, Wand2, Move, ChevronDown, FileOutput, Square, Circle, Diamond, Type, Frame, Upload, Edit3, ToggleLeft } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Slider } from "./ui/slider";
+import { Switch } from "./ui/switch";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { toast } from "sonner";
 import ConvertDialog from "./ConvertDialog";
@@ -175,6 +176,14 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   const [scanHistory, setScanHistory] = useState<ScanEntry[]>(loadScanHistory);
   const [showScanImport, setShowScanImport] = useState(false);
 
+  // Integration toggles
+  const [useChatIdeas, setUseChatIdeas] = useState(true);
+  const [useScanData, setUseScanData] = useState(true);
+
+  // Effective imported data based on toggles
+  const effectiveIdeas = useChatIdeas ? importedIdeas : undefined;
+  const effectivePalette = useScanData ? importedPalette : null;
+
   // Follow-up questions flow
   const [phase, setPhase] = useState<Phase>("input");
   const [followUps, setFollowUps] = useState<FollowUpQ[]>([]);
@@ -234,16 +243,16 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   // Get active palette colors
   const getActivePalette = useCallback((): string[] => {
     if (customPalette) return customPalette;
-    if (activeTheme === "Scanned Palette" && importedPalette) return Object.values(importedPalette);
+    if (activeTheme === "Scanned Palette" && effectivePalette) return Object.values(effectivePalette);
     const theme = BOARD_THEMES.find(t => t.name === activeTheme);
     return theme ? theme.colors : STICKY_COLORS.map(c => c.hex);
-  }, [customPalette, activeTheme, importedPalette]);
+  }, [customPalette, activeTheme, effectivePalette]);
 
   // Import ideas from Ideation tab — ALWAYS creates a NEW board
   const importIdeas = () => {
-    if (!importedIdeas || importedIdeas.length === 0) return;
+    if (!effectiveIdeas || effectiveIdeas.length === 0) return;
     const palette = getActivePalette();
-    const newItems: LayoutItem[] = importedIdeas.map((idea, i) => ({
+    const newItems: LayoutItem[] = effectiveIdeas.map((idea, i) => ({
       content: idea, x: 0, y: 0, type: "sticky_note", color: palette[i % palette.length],
     }));
     const organized = organizeGrid(newItems, gridDensity, canvasSize.w);
@@ -252,7 +261,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     setInput("Imported ideas");
     setItems(organized);
     setPhase("board");
-    toast.success(`Created new board with ${importedIdeas.length} ideas`);
+    toast.success(`Created new board with ${effectiveIdeas.length} ideas`);
   };
 
   // Import scan entry content into board — ALWAYS creates a NEW board
@@ -300,11 +309,11 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   }, [items]);
 
   const applyScannedPalette = useCallback(() => {
-    if (!importedPalette) return;
-    const colors = Object.values(importedPalette);
+    if (!effectivePalette) return;
+    const colors = Object.values(effectivePalette);
     setCustomPalette(colors);
     applyTheme(colors, "Scanned Palette");
-  }, [importedPalette, applyTheme]);
+  }, [effectivePalette, applyTheme]);
 
   const applyCustomPalette = (colors: string[]) => {
     setCustomPalette(colors);
@@ -320,7 +329,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
   };
 
   const importPalette = () => {
-    if (!importedPalette) return;
+    if (!effectivePalette) return;
     toast.success("Palette applied to board generation");
   };
 
@@ -378,8 +387,8 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     setPhase("questions");
 
     const boardTypeDesc = selectedBoardTypes.includes("auto") ? "the best layout type" : selectedBoardTypes.join(", ");
-    const scanContext = importedPalette ? `\n\nThe user has also scanned a moodboard with these extracted colors: ${JSON.stringify(importedPalette)}. Consider these aesthetics.` : "";
-    const ideaContext = importedIdeas && importedIdeas.length > 0 ? `\n\nThe user has these ideas from a previous chat: ${importedIdeas.join(", ")}. Consider these.` : "";
+    const scanContext = effectivePalette ? `\n\nThe user has also scanned a moodboard with these extracted colors: ${JSON.stringify(effectivePalette)}. Consider these aesthetics.` : "";
+    const ideaContext = effectiveIdeas && effectiveIdeas.length > 0 ? `\n\nThe user has these ideas from a previous chat: ${effectiveIdeas.join(", ")}. Consider these.` : "";
 
     try {
       const resp = await fetch(CHAT_URL, {
@@ -404,7 +413,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     } finally {
       setLoadingQs(false);
     }
-  }, [input, layoutType, importedPalette, importedIdeas, selectedBoardTypes]);
+  }, [input, layoutType, effectivePalette, effectiveIdeas, selectedBoardTypes]);
 
   const answerQuestion = () => {
     const updated = [...followUps];
@@ -448,8 +457,8 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
     const context = answers.filter(a => a.answer).map(a => `Q: ${a.question}\nA: ${a.answer}`).join("\n\n");
     const paletteColors = getActivePalette();
 
-    const scanContext = importedPalette ? `\nThe user scanned a moodboard and extracted: ${JSON.stringify(importedPalette)}. Use these colors.` : "";
-    const ideaContext = importedIdeas && importedIdeas.length > 0 ? `\nThe user also brainstormed these ideas in chat: ${importedIdeas.join("; ")}. Integrate relevant ones.` : "";
+    const scanContext = effectivePalette ? `\nThe user scanned a moodboard and extracted: ${JSON.stringify(effectivePalette)}. Use these colors.` : "";
+    const ideaContext = effectiveIdeas && effectiveIdeas.length > 0 ? `\nThe user also brainstormed these ideas in chat: ${effectiveIdeas.join("; ")}. Integrate relevant ones.` : "";
 
     // Board type instructions
     const boardTypeDesc = selectedBoardTypes.includes("auto") ? "" : `\n\nThe user specifically wants these board types: ${selectedBoardTypes.join(", ")}. ${
@@ -495,7 +504,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
       setStatus("Generation failed. Try again.");
       setPhase("input");
     } finally { setGenerating(false); }
-  }, [layoutType, importedPalette, importedIdeas, gridDensity, canvasSize, getActivePalette, selectedBoardTypes]);
+  }, [layoutType, effectivePalette, effectiveIdeas, gridDensity, canvasSize, getActivePalette, selectedBoardTypes]);
 
   const saveSession = () => { doAutoSave(); toast.success("Board saved!"); };
 
@@ -711,24 +720,65 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
             </AnimatePresence>
           </div>
 
-          {/* Import buttons */}
-          {((importedIdeas && importedIdeas.length > 0) || importedPalette) && (
-            <div>
-              <h4 className="text-serif text-sm mb-2 text-foreground">Import Data</h4>
-              {importedIdeas && importedIdeas.length > 0 && (
-                <button onClick={importIdeas} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors mb-1.5">
-                  <Import className="w-3 h-3 text-accent" />
-                  Import {importedIdeas.length} ideas from chat
-                </button>
-              )}
-              {importedPalette && (
-                <button onClick={applyScannedPalette} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
-                  <Palette className="w-3 h-3 text-accent" />
-                  Apply scanned palette
-                </button>
-              )}
+          {/* Integration Toggles */}
+          <div>
+            <h4 className="text-serif text-sm mb-3 text-foreground">Integrations</h4>
+            <div className="space-y-3">
+              {/* Chat ideas toggle */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <MessageSquare className="w-3.5 h-3.5 text-accent shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground">Chat Ideas</p>
+                    <p className="text-[10px] text-foreground/50 truncate">
+                      {importedIdeas && importedIdeas.length > 0 ? `${importedIdeas.length} ideas available` : "No ideas yet"}
+                    </p>
+                  </div>
+                </div>
+                <Switch 
+                  checked={useChatIdeas} 
+                  onCheckedChange={setUseChatIdeas}
+                  disabled={!importedIdeas || importedIdeas.length === 0}
+                />
+              </div>
+
+              {/* Scan data toggle */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Palette className="w-3.5 h-3.5 text-accent shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground">Scan Palette</p>
+                    <p className="text-[10px] text-foreground/50 truncate">
+                      {importedPalette ? `${Object.keys(importedPalette).length} colors extracted` : "No palette yet"}
+                    </p>
+                  </div>
+                </div>
+                <Switch 
+                  checked={useScanData} 
+                  onCheckedChange={setUseScanData}
+                  disabled={!importedPalette}
+                />
+              </div>
             </div>
-          )}
+
+            {/* Import action buttons — only show when toggles are on */}
+            {((effectiveIdeas && effectiveIdeas.length > 0) || effectivePalette) && (
+              <div className="mt-3 space-y-1.5">
+                {effectiveIdeas && effectiveIdeas.length > 0 && (
+                  <button onClick={importIdeas} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
+                    <Import className="w-3 h-3 text-accent" />
+                    Import {effectiveIdeas.length} ideas from chat
+                  </button>
+                )}
+                {effectivePalette && (
+                  <button onClick={applyScannedPalette} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 text-xs text-foreground hover:bg-secondary transition-colors">
+                    <Palette className="w-3 h-3 text-accent" />
+                    Apply scanned palette
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Convert — in left sidebar */}
           {phase === "board" && items.length > 0 && (
@@ -876,11 +926,17 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
                   </div>
                   <h2 className="text-serif text-2xl mb-2 text-foreground">Create a board</h2>
                   <p className="text-sm text-foreground/60">Brain dump your ideas and AI will organize them into a visual layout</p>
-                  {(importedIdeas && importedIdeas.length > 0) && (
-                    <p className="text-xs text-accent mt-2">✦ {importedIdeas.length} ideas from chat ready to integrate</p>
+                  {(effectiveIdeas && effectiveIdeas.length > 0) && (
+                    <p className="text-xs text-accent mt-2">✦ {effectiveIdeas.length} ideas from chat ready to integrate</p>
                   )}
-                  {importedPalette && (
+                  {effectivePalette && (
                     <p className="text-xs text-accent mt-1">✦ Moodboard palette will be applied</p>
+                  )}
+                  {importedIdeas && importedIdeas.length > 0 && !useChatIdeas && (
+                    <p className="text-xs text-foreground/40 mt-2">Chat ideas available but disabled</p>
+                  )}
+                  {importedPalette && !useScanData && (
+                    <p className="text-xs text-foreground/40 mt-1">Scan palette available but disabled</p>
                   )}
                 </div>
                 <textarea

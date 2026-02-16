@@ -47,7 +47,7 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
   const fileRef = useRef<HTMLInputElement>(null);
 
   // File/URL upload state
-  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string; extractedText?: string } | null>(null);
+  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string; extractedText?: string; dataUrl?: string; mimeType?: string } | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [fetchingUrl, setFetchingUrl] = useState(false);
@@ -122,6 +122,7 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
   // Handle file attachment
   const handleFileSelect = useCallback(async (file: File) => {
     const isTextFile = file.type.startsWith("text/") || /\.(txt|md|csv|json|xml|log|yaml|yml|toml|ini|cfg)$/i.test(file.name);
+    const isBinaryDoc = /\.(pdf|pptx?|docx?)$/i.test(file.name);
     
     if (isTextFile) {
       // Read text files directly
@@ -132,8 +133,33 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
         toast.success(`Attached: ${file.name}`);
       };
       textReader.readAsText(file);
+    } else if (isBinaryDoc) {
+      // Binary docs (PDF, DOCX, PPTX): send as multimodal to AI directly
+      // Gemini can natively read PDFs and other document formats
+      setExtractingFile(true);
+      toast.info(`Processing ${file.name}...`);
+      
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const dataUrl = e.target?.result as string;
+        const mimeType = file.type || (file.name.endsWith('.pdf') ? 'application/pdf' : 
+          file.name.endsWith('.docx') ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' :
+          file.name.endsWith('.pptx') ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' :
+          'application/octet-stream');
+        
+        setAttachedFile({ 
+          name: file.name, 
+          content: `[${file.name} — will be sent directly to AI for analysis]`,
+          extractedText: `📄 File "${file.name}" attached as a document. The AI will read it directly.`,
+          dataUrl,
+          mimeType,
+        });
+        setExtractingFile(false);
+        toast.success(`Attached: ${file.name} (will be analyzed by AI directly)`);
+      };
+      reader.readAsDataURL(file);
     } else {
-      // Binary files: send to extraction backend
+      // Other binary files: try extraction backend
       setExtractingFile(true);
       toast.info(`Processing ${file.name}...`);
       
@@ -152,7 +178,6 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
           const data = await res.json();
           if (data.error) throw new Error(data.error);
           
-          // Build structured text from extraction
           let extractedText = "";
           if (data.sections && data.sections.length > 0) {
             extractedText = data.sections.map((s: any) => `## ${s.heading}\n${s.content}`).join("\n\n");
@@ -169,7 +194,6 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
         } catch (err: any) {
           console.error("File extraction failed:", err);
           toast.error(`Failed to extract text from ${file.name}`);
-          // Fallback: attach with note
           setAttachedFile({ 
             name: file.name, 
             content: dataUrl,
@@ -246,9 +270,18 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
 
     // Build the message with extracted context — NEVER send raw binary
     let fullMessage = text;
+    const fileAttachments: { dataUrl: string; mimeType: string }[] = [];
+    
     if (attachedFile) {
-      const extractedContent = attachedFile.extractedText || attachedFile.content;
-      fullMessage += `\n\n---\n📄 EXTRACTED DOCUMENT: ${attachedFile.name}\n${extractedContent.slice(0, 8000)}`;
+      if (attachedFile.dataUrl && attachedFile.mimeType) {
+        // Multimodal: send file directly to AI
+        fullMessage += `\n\n---\n📄 ATTACHED FILE: ${attachedFile.name}\nPlease analyze this document thoroughly.`;
+        fileAttachments.push({ dataUrl: attachedFile.dataUrl, mimeType: attachedFile.mimeType });
+      } else {
+        // Text-extracted content
+        const extractedContent = attachedFile.extractedText || attachedFile.content;
+        fullMessage += `\n\n---\n📄 EXTRACTED DOCUMENT: ${attachedFile.name}\n${extractedContent.slice(0, 8000)}`;
+      }
     }
     if (attachedUrl) {
       fullMessage += `\n\n---\n🔗 EXTRACTED URL: ${attachedUrl.title}\n${attachedUrl.content.slice(0, 8000)}`;
@@ -277,7 +310,11 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
           "Content-Type": "application/json",
           Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
         },
-        body: JSON.stringify({ messages: allMessages, mode: "ideation" }),
+        body: JSON.stringify({ 
+          messages: allMessages, 
+          mode: "ideation",
+          fileAttachments: fileAttachments.length > 0 ? fileAttachments : undefined,
+        }),
       });
 
       if (!resp.ok || !resp.body) throw new Error("Stream failed");

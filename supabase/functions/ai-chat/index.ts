@@ -9,7 +9,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { messages, mode } = await req.json();
+    const { messages, mode, fileAttachments } = await req.json();
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
@@ -18,13 +18,15 @@ serve(async (req) => {
 
 CRITICAL BEHAVIORAL RULES:
 - You have FULL ACCESS to file contents and URL contents. When a user attaches a file or URL, the system extracts the text content and provides it to you inline. You MUST treat this extracted content as if you read the document yourself.
+- When files are attached as multimodal content (PDFs, images), you can SEE and READ them directly. Analyze them thoroughly.
 - NEVER say "I cannot directly see the binary content" or "I cannot access external links" or "I don't have access to the file." These responses are FORBIDDEN.
 - When you receive content prefixed with "📄 EXTRACTED DOCUMENT:" or "🔗 EXTRACTED URL:", you ARE reading that document. Respond as if you have full understanding of it.
+- When you receive a PDF or document as an attachment, you can read it directly. Analyze it fully.
 - If extracted content seems incomplete, say "I've processed the available content from your file" and work with what you have.
 - If extraction failed, say "Unable to retrieve the content. Please check the file or link and try again."
 
 CAPABILITIES:
-- Analyze uploaded documents (PDFs, DOCX, PPTX, TXT, etc.) — content is pre-extracted for you
+- Analyze uploaded documents (PDFs, DOCX, PPTX, TXT, etc.) — content is pre-extracted for you OR provided as direct file attachments
 - Analyze URL content — pages are fetched and parsed for you  
 - Summarize, extract arguments, generate notes, create outlines
 - Transform content into slides, mindmaps, structured documents
@@ -63,6 +65,24 @@ Use a grid layout with 300px spacing. Assign soft pastel colors. Group related i
 
     const systemPrompt = systemPrompts[mode] || systemPrompts.ideation;
 
+    // Build messages with multimodal support for file attachments
+    const processedMessages = messages.map((msg: any, idx: number) => {
+      // Only process the last user message for file attachments
+      if (msg.role === "user" && idx === messages.length - 1 && fileAttachments?.length > 0) {
+        const contentParts: any[] = [{ type: "text", text: msg.content }];
+        for (const attachment of fileAttachments) {
+          if (attachment.dataUrl && attachment.mimeType) {
+            contentParts.push({
+              type: "image_url",
+              image_url: { url: attachment.dataUrl },
+            });
+          }
+        }
+        return { role: msg.role, content: contentParts };
+      }
+      return msg;
+    });
+
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -73,7 +93,7 @@ Use a grid layout with 300px spacing. Assign soft pastel colors. Group related i
         model: "google/gemini-3-flash-preview",
         messages: [
           { role: "system", content: systemPrompt },
-          ...messages,
+          ...processedMessages,
         ],
         stream: true,
       }),
