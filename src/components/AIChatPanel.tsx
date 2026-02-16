@@ -47,7 +47,7 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
   const fileRef = useRef<HTMLInputElement>(null);
 
   // File/URL upload state
-  const [attachedFile, setAttachedFile] = useState<{ name: string; dataUrl?: string; extractedText?: string } | null>(null);
+  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string; extractedText?: string } | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [fetchingUrl, setFetchingUrl] = useState(false);
@@ -124,30 +124,60 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
     const isTextFile = file.type.startsWith("text/") || /\.(txt|md|csv|json|xml|log|yaml|yml|toml|ini|cfg)$/i.test(file.name);
     
     if (isTextFile) {
-      // Read text files directly — no need for extraction
+      // Read text files directly
       const textReader = new FileReader();
       textReader.onload = (te) => {
         const text = te.target?.result as string;
-        setAttachedFile({ name: file.name, extractedText: text });
+        setAttachedFile({ name: file.name, content: text, extractedText: text });
         toast.success(`Attached: ${file.name}`);
       };
       textReader.readAsText(file);
     } else {
-      // Binary files (PDF, DOCX, PPTX): read as base64 data URL and send directly to AI model
-      // Gemini natively reads PDFs and other document formats via multimodal input
+      // Binary files: send to extraction backend
       setExtractingFile(true);
       toast.info(`Processing ${file.name}...`);
       
       const reader = new FileReader();
-      reader.onload = (e) => {
+      reader.onload = async (e) => {
         const dataUrl = e.target?.result as string;
-        setAttachedFile({ name: file.name, dataUrl });
-        setExtractingFile(false);
-        toast.success(`Attached: ${file.name} — AI will read it directly`);
-      };
-      reader.onerror = () => {
-        setExtractingFile(false);
-        toast.error(`Failed to read ${file.name}`);
+        try {
+          const res = await fetch(FILE_EXTRACT, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            },
+            body: JSON.stringify({ fileData: dataUrl, fileName: file.name }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          
+          // Build structured text from extraction
+          let extractedText = "";
+          if (data.sections && data.sections.length > 0) {
+            extractedText = data.sections.map((s: any) => `## ${s.heading}\n${s.content}`).join("\n\n");
+          } else {
+            extractedText = data.fullText || data.summary || "";
+          }
+          
+          setAttachedFile({ 
+            name: file.name, 
+            content: `[${data.wordCount || 0} words extracted]`,
+            extractedText 
+          });
+          toast.success(`Extracted content from: ${file.name} (${data.wordCount || 0} words)`);
+        } catch (err: any) {
+          console.error("File extraction failed:", err);
+          toast.error(`Failed to extract text from ${file.name}`);
+          // Fallback: attach with note
+          setAttachedFile({ 
+            name: file.name, 
+            content: dataUrl,
+            extractedText: `[File extraction failed for ${file.name}. The file may be in an unsupported format.]`
+          });
+        } finally {
+          setExtractingFile(false);
+        }
       };
       reader.readAsDataURL(file);
     }
@@ -214,46 +244,19 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
     if (!text || isLoading) return;
     setInput("");
 
-    // Build the user-visible message (text only, no binary)
-    let displayMessage = text;
-    if (attachedFile) displayMessage += `\n\n📄 [Attached: ${attachedFile.name}]`;
-    if (attachedUrl) displayMessage += `\n\n🔗 [Attached: ${attachedUrl.title}]`;
-
-    const userMsg: Msg = { role: "user", content: displayMessage };
-    setMessages(prev => [...prev, userMsg]);
-    setIsLoading(true);
-
-    // Build the actual AI message with file/URL content
-    // For binary files: send as multimodal content parts
-    // For text files: send inline
-    // For URLs: send extracted content inline
-    const aiMessageParts: any[] = [];
-    let textContent = text;
-
-    if (attachedFile?.extractedText) {
-      textContent += `\n\n---\n📄 EXTRACTED DOCUMENT: ${attachedFile.name}\n${attachedFile.extractedText.slice(0, 12000)}`;
+    // Build the message with extracted context — NEVER send raw binary
+    let fullMessage = text;
+    if (attachedFile) {
+      const extractedContent = attachedFile.extractedText || attachedFile.content;
+      fullMessage += `\n\n---\n📄 EXTRACTED DOCUMENT: ${attachedFile.name}\n${extractedContent.slice(0, 8000)}`;
     }
     if (attachedUrl) {
-      textContent += `\n\n---\n🔗 EXTRACTED URL: ${attachedUrl.title}\n${attachedUrl.content.slice(0, 8000)}`;
+      fullMessage += `\n\n---\n🔗 EXTRACTED URL: ${attachedUrl.title}\n${attachedUrl.content.slice(0, 8000)}`;
     }
 
-    aiMessageParts.push({ type: "text", text: textContent });
-
-    // Add binary file as inline image/document for Gemini multimodal
-    if (attachedFile?.dataUrl) {
-      aiMessageParts.push({
-        type: "image_url",
-        image_url: { url: attachedFile.dataUrl },
-      });
-    }
-
-    // Build the message for the AI (multipart if file attached, simple string otherwise)
-    const aiUserMessage = attachedFile?.dataUrl
-      ? { role: "user", content: aiMessageParts }
-      : { role: "user", content: textContent };
-
-    const capturedFile = attachedFile;
-    const capturedUrl = attachedUrl;
+    const userMsg: Msg = { role: "user", content: fullMessage };
+    setMessages(prev => [...prev, userMsg]);
+    setIsLoading(true);
     setAttachedFile(null);
     setAttachedUrl(null);
 
@@ -265,10 +268,7 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
     }
 
     let assistantSoFar = "";
-    // Send ALL previous messages as text-only, plus the new multimodal message
-    const previousMessages = messages.map(m => ({ role: m.role, content: m.content }));
-    const allMessages = [...previousMessages, aiUserMessage];
-
+    const allMessages = [...messages, userMsg];
 
     try {
       const resp = await fetch(CHAT_URL, {
@@ -451,14 +451,14 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
             {extractingFile && (
               <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 text-xs">
                 <Loader2 className="w-3 h-3 text-accent animate-spin" />
-                <span className="text-accent">Reading file...</span>
+                <span className="text-accent">Extracting text...</span>
               </div>
             )}
             {attachedFile && (
               <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 text-xs">
                 <FileText className="w-3 h-3 text-accent" />
                 <span className="text-foreground truncate max-w-[120px]">{attachedFile.name}</span>
-                {(attachedFile.extractedText || attachedFile.dataUrl) && <span className="text-[10px] text-accent">✓</span>}
+                {attachedFile.extractedText && <span className="text-[10px] text-accent">✓</span>}
                 <button onClick={() => setAttachedFile(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
               </div>
             )}
