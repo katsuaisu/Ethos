@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Send, Loader2, Sparkles, Trash2, Plus, FolderOpen } from "lucide-react";
+import { Send, Loader2, Sparkles, Trash2, Plus, FolderOpen, Paperclip, Link, X, FileText } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
+import { toast } from "sonner";
 
 type Msg = { role: "user" | "assistant"; content: string };
 
@@ -16,6 +17,9 @@ interface ChatSession {
 const SESSIONS_KEY = "ethos-chat-sessions";
 const ACTIVE_KEY = "ethos-chat-active";
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
+const URL_EXTRACT = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/url-extract`;
+
+const ACCEPTED_FILES = ".pdf,.pptx,.ppt,.docx,.doc,.txt,.md,.csv,.json,.xml";
 
 function loadSessions(): ChatSession[] {
   try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || "[]"); } catch { return []; }
@@ -27,9 +31,10 @@ function loadActiveId(): string | null {
 
 interface AIChatPanelProps {
   onShareIdeas?: (ideas: string[]) => void;
+  onTransformToBoard?: (content: string) => void;
 }
 
-export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
+export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChatPanelProps = {}) {
   const [sessions, setSessions] = useState<ChatSession[]>(loadSessions);
   const [activeId, setActiveId] = useState<string | null>(loadActiveId);
   const [messages, setMessages] = useState<Msg[]>([]);
@@ -38,6 +43,14 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
   const [showSessions, setShowSessions] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // File/URL upload state
+  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string } | null>(null);
+  const [urlInput, setUrlInput] = useState("");
+  const [showUrlInput, setShowUrlInput] = useState(false);
+  const [fetchingUrl, setFetchingUrl] = useState(false);
+  const [attachedUrl, setAttachedUrl] = useState<{ title: string; content: string } | null>(null);
 
   // Load active session messages
   useEffect(() => {
@@ -88,6 +101,8 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
     setMessages([]);
     setActiveId(null);
     setShowSessions(false);
+    setAttachedFile(null);
+    setAttachedUrl(null);
   };
 
   const loadChat = (session: ChatSession) => {
@@ -102,13 +117,78 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
     if (activeId === id) { setMessages([]); setActiveId(null); }
   };
 
+  // Handle file attachment
+  const handleFileSelect = useCallback((file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      // For text files, read as text directly
+      if (file.type.startsWith("text/") || /\.(txt|md|csv|json|xml)$/i.test(file.name)) {
+        const textReader = new FileReader();
+        textReader.onload = (te) => {
+          setAttachedFile({ name: file.name, content: te.target?.result as string });
+          toast.success(`Attached: ${file.name}`);
+        };
+        textReader.readAsText(file);
+      } else {
+        // Binary files: base64
+        setAttachedFile({ name: file.name, content: result });
+        toast.success(`Attached: ${file.name}`);
+      }
+    };
+    reader.readAsDataURL(file);
+  }, []);
+
+  // Fetch URL content
+  const fetchUrl = async () => {
+    if (!urlInput.trim()) return;
+    setFetchingUrl(true);
+    try {
+      let formattedUrl = urlInput.trim();
+      if (!formattedUrl.startsWith("http")) formattedUrl = `https://${formattedUrl}`;
+
+      const res = await fetch(URL_EXTRACT, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+        },
+        body: JSON.stringify({ url: formattedUrl }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      setAttachedUrl({ title: data.title || formattedUrl, content: data.content || "" });
+      setShowUrlInput(false);
+      setUrlInput("");
+      toast.success(`Fetched: ${data.title || formattedUrl}`);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to fetch URL");
+    } finally {
+      setFetchingUrl(false);
+    }
+  };
+
   const send = useCallback(async () => {
     const text = input.trim();
     if (!text || isLoading) return;
     setInput("");
-    const userMsg: Msg = { role: "user", content: text };
+
+    // Build the message with attached context
+    let fullMessage = text;
+    if (attachedFile) {
+      const isText = !attachedFile.content.startsWith("data:");
+      const preview = isText ? attachedFile.content.slice(0, 6000) : "[Binary file attached]";
+      fullMessage += `\n\n---\n📎 Attached file: ${attachedFile.name}\n${preview}`;
+    }
+    if (attachedUrl) {
+      fullMessage += `\n\n---\n🔗 URL content: ${attachedUrl.title}\n${attachedUrl.content.slice(0, 6000)}`;
+    }
+
+    const userMsg: Msg = { role: "user", content: fullMessage };
     setMessages(prev => [...prev, userMsg]);
     setIsLoading(true);
+    setAttachedFile(null);
+    setAttachedUrl(null);
 
     if (!activeId && messages.length === 0) {
       const id = Date.now().toString();
@@ -175,11 +255,16 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
     } finally {
       setIsLoading(false);
     }
-  }, [input, isLoading, messages, activeId]);
+  }, [input, isLoading, messages, activeId, attachedFile, attachedUrl]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
+
+  // Quick actions for content transformation
+  const transformActions = messages.length > 0 ? [
+    { label: "→ Board", action: () => { if (onTransformToBoard) { const lastAssistant = messages.filter(m => m.role === "assistant").pop(); if (lastAssistant) onTransformToBoard(lastAssistant.content); } } },
+  ] : [];
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -234,8 +319,8 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
             <div className="grid grid-cols-1 gap-2 text-left max-w-[300px] w-full">
               {[
                 { title: "Ideate", desc: "Brainstorm and structure your ideas with AI" },
-                { title: "Scan", desc: "Analyze images, PDFs, and docs for insights" },
-                { title: "Preview", desc: "Generate visual boards \u2014 mindmaps, flowcharts, grids" },
+                { title: "Upload", desc: "Attach PDFs, docs, or paste URLs for AI analysis" },
+                { title: "Transform", desc: "Turn conversations into boards, slides, or docs" },
                 { title: "Sync", desc: "Push your boards directly to Miro" },
               ].map(item => (
                 <div key={item.title} className="flex items-start gap-3 bg-secondary/30 rounded-xl px-3 py-2.5">
@@ -249,7 +334,7 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
                 </div>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground/60 mt-6">Start by typing anything below</p>
+            <p className="text-xs text-muted-foreground/60 mt-6">Start by typing, uploading a file, or pasting a URL</p>
           </motion.div>
         )}
 
@@ -260,7 +345,7 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
                 {msg.role === "assistant" ? (
                   <div className="prose-ethos"><ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown></div>
                 ) : (
-                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                  <p className="whitespace-pre-wrap">{msg.content.length > 500 ? msg.content.slice(0, 500) + "..." : msg.content}</p>
                 )}
               </div>
             </motion.div>
@@ -277,15 +362,83 @@ export default function AIChatPanel({ onShareIdeas }: AIChatPanelProps = {}) {
         )}
       </div>
 
-      {/* Input */}
+      {/* Input area */}
       <div className="px-4 pb-4 pt-2 shrink-0">
+        {/* Transform actions */}
+        {transformActions.length > 0 && (
+          <div className="flex gap-1.5 mb-2">
+            {transformActions.map((ta, i) => (
+              <button key={i} onClick={ta.action} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-md bg-accent/10 text-accent hover:bg-accent/15 transition-colors">
+                {ta.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Attached file/URL previews */}
+        {(attachedFile || attachedUrl) && (
+          <div className="flex gap-2 mb-2">
+            {attachedFile && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 text-xs">
+                <FileText className="w-3 h-3 text-accent" />
+                <span className="text-foreground truncate max-w-[120px]">{attachedFile.name}</span>
+                <button onClick={() => setAttachedFile(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
+              </div>
+            )}
+            {attachedUrl && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 text-xs">
+                <Link className="w-3 h-3 text-accent" />
+                <span className="text-foreground truncate max-w-[120px]">{attachedUrl.title}</span>
+                <button onClick={() => setAttachedUrl(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* URL input */}
+        <AnimatePresence>
+          {showUrlInput && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden mb-2">
+              <div className="flex gap-2 items-center">
+                <input
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="https://example.com"
+                  className="flex-1 bg-secondary/50 border border-border rounded-lg px-3 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-accent/40 placeholder:text-muted-foreground/50"
+                  onKeyDown={(e) => { if (e.key === "Enter") fetchUrl(); }}
+                  autoFocus
+                />
+                <button onClick={fetchUrl} disabled={!urlInput.trim() || fetchingUrl}
+                  className="px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium disabled:opacity-40">
+                  {fetchingUrl ? <Loader2 className="w-3 h-3 animate-spin" /> : "Fetch"}
+                </button>
+                <button onClick={() => { setShowUrlInput(false); setUrlInput(""); }} className="text-muted-foreground hover:text-foreground">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {messages.length > 0 && (
           <button onClick={newChat} className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors mb-2">
             <Plus className="w-3 h-3" />
             New chat
           </button>
         )}
+
+        <input ref={fileRef} type="file" accept={ACCEPTED_FILES} className="hidden" onChange={(e) => { if (e.target.files?.[0]) handleFileSelect(e.target.files[0]); e.target.value = ""; }} />
+
         <div className="glass rounded-xl flex items-end gap-2 p-2">
+          {/* Attachment buttons */}
+          <div className="flex gap-1 shrink-0 pb-1">
+            <button onClick={() => fileRef.current?.click()} className="w-7 h-7 rounded-lg hover:bg-secondary flex items-center justify-center transition-colors" title="Attach file">
+              <Paperclip className="w-3.5 h-3.5 text-muted-foreground" />
+            </button>
+            <button onClick={() => setShowUrlInput(!showUrlInput)} className="w-7 h-7 rounded-lg hover:bg-secondary flex items-center justify-center transition-colors" title="Paste URL">
+              <Link className="w-3.5 h-3.5 text-muted-foreground" />
+            </button>
+          </div>
           <textarea
             ref={inputRef}
             value={input}
