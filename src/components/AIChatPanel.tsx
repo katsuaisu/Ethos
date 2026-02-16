@@ -18,6 +18,7 @@ const SESSIONS_KEY = "ethos-chat-sessions";
 const ACTIVE_KEY = "ethos-chat-active";
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-chat`;
 const URL_EXTRACT = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/url-extract`;
+const FILE_EXTRACT = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/file-extract`;
 
 const ACCEPTED_FILES = ".pdf,.pptx,.ppt,.docx,.doc,.txt,.md,.csv,.json,.xml";
 
@@ -46,11 +47,12 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
   const fileRef = useRef<HTMLInputElement>(null);
 
   // File/URL upload state
-  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string } | null>(null);
+  const [attachedFile, setAttachedFile] = useState<{ name: string; content: string; extractedText?: string } | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [fetchingUrl, setFetchingUrl] = useState(false);
-  const [attachedUrl, setAttachedUrl] = useState<{ title: string; content: string } | null>(null);
+  const [extractingFile, setExtractingFile] = useState(false);
+  const [attachedUrl, setAttachedUrl] = useState<{ title: string; content: string; structured?: any } | null>(null);
 
   // Load active session messages
   useEffect(() => {
@@ -118,25 +120,67 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
   };
 
   // Handle file attachment
-  const handleFileSelect = useCallback((file: File) => {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const result = e.target?.result as string;
-      // For text files, read as text directly
-      if (file.type.startsWith("text/") || /\.(txt|md|csv|json|xml)$/i.test(file.name)) {
-        const textReader = new FileReader();
-        textReader.onload = (te) => {
-          setAttachedFile({ name: file.name, content: te.target?.result as string });
-          toast.success(`Attached: ${file.name}`);
-        };
-        textReader.readAsText(file);
-      } else {
-        // Binary files: base64
-        setAttachedFile({ name: file.name, content: result });
+  const handleFileSelect = useCallback(async (file: File) => {
+    const isTextFile = file.type.startsWith("text/") || /\.(txt|md|csv|json|xml|log|yaml|yml|toml|ini|cfg)$/i.test(file.name);
+    
+    if (isTextFile) {
+      // Read text files directly
+      const textReader = new FileReader();
+      textReader.onload = (te) => {
+        const text = te.target?.result as string;
+        setAttachedFile({ name: file.name, content: text, extractedText: text });
         toast.success(`Attached: ${file.name}`);
-      }
-    };
-    reader.readAsDataURL(file);
+      };
+      textReader.readAsText(file);
+    } else {
+      // Binary files: send to extraction backend
+      setExtractingFile(true);
+      toast.info(`Processing ${file.name}...`);
+      
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        const dataUrl = e.target?.result as string;
+        try {
+          const res = await fetch(FILE_EXTRACT, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+            },
+            body: JSON.stringify({ fileData: dataUrl, fileName: file.name }),
+          });
+          const data = await res.json();
+          if (data.error) throw new Error(data.error);
+          
+          // Build structured text from extraction
+          let extractedText = "";
+          if (data.sections && data.sections.length > 0) {
+            extractedText = data.sections.map((s: any) => `## ${s.heading}\n${s.content}`).join("\n\n");
+          } else {
+            extractedText = data.fullText || data.summary || "";
+          }
+          
+          setAttachedFile({ 
+            name: file.name, 
+            content: `[${data.wordCount || 0} words extracted]`,
+            extractedText 
+          });
+          toast.success(`Extracted content from: ${file.name} (${data.wordCount || 0} words)`);
+        } catch (err: any) {
+          console.error("File extraction failed:", err);
+          toast.error(`Failed to extract text from ${file.name}`);
+          // Fallback: attach with note
+          setAttachedFile({ 
+            name: file.name, 
+            content: dataUrl,
+            extractedText: `[File extraction failed for ${file.name}. The file may be in an unsupported format.]`
+          });
+        } finally {
+          setExtractingFile(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
   }, []);
 
   // Fetch URL content
@@ -157,12 +201,28 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
-      setAttachedUrl({ title: data.title || formattedUrl, content: data.content || "" });
+      
+      // Build structured content string from extraction
+      let structuredContent = "";
+      if (data.structured?.sections && data.structured.sections.length > 0) {
+        structuredContent = data.structured.sections.map((s: any) => `## ${s.heading}\n${s.content}`).join("\n\n");
+        if (data.structured.keyConcepts?.length > 0) {
+          structuredContent += "\n\n## Key Concepts\n" + data.structured.keyConcepts.map((c: string) => `- ${c}`).join("\n");
+        }
+      } else {
+        structuredContent = data.content || "";
+      }
+      
+      setAttachedUrl({ 
+        title: data.title || formattedUrl, 
+        content: structuredContent,
+        structured: data.structured 
+      });
       setShowUrlInput(false);
       setUrlInput("");
       toast.success(`Fetched: ${data.title || formattedUrl}`);
     } catch (e: any) {
-      toast.error(e.message || "Failed to fetch URL");
+      toast.error(e.message || "Unable to retrieve page content. Please check the link.");
     } finally {
       setFetchingUrl(false);
     }
@@ -173,15 +233,14 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
     if (!text || isLoading) return;
     setInput("");
 
-    // Build the message with attached context
+    // Build the message with extracted context — NEVER send raw binary
     let fullMessage = text;
     if (attachedFile) {
-      const isText = !attachedFile.content.startsWith("data:");
-      const preview = isText ? attachedFile.content.slice(0, 6000) : "[Binary file attached]";
-      fullMessage += `\n\n---\n📎 Attached file: ${attachedFile.name}\n${preview}`;
+      const extractedContent = attachedFile.extractedText || attachedFile.content;
+      fullMessage += `\n\n---\n📄 EXTRACTED DOCUMENT: ${attachedFile.name}\n${extractedContent.slice(0, 8000)}`;
     }
     if (attachedUrl) {
-      fullMessage += `\n\n---\n🔗 URL content: ${attachedUrl.title}\n${attachedUrl.content.slice(0, 6000)}`;
+      fullMessage += `\n\n---\n🔗 EXTRACTED URL: ${attachedUrl.title}\n${attachedUrl.content.slice(0, 8000)}`;
     }
 
     const userMsg: Msg = { role: "user", content: fullMessage };
@@ -376,12 +435,19 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
         )}
 
         {/* Attached file/URL previews */}
-        {(attachedFile || attachedUrl) && (
-          <div className="flex gap-2 mb-2">
+        {(attachedFile || attachedUrl || extractingFile) && (
+          <div className="flex gap-2 mb-2 flex-wrap">
+            {extractingFile && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-accent/10 text-xs">
+                <Loader2 className="w-3 h-3 text-accent animate-spin" />
+                <span className="text-accent">Extracting text...</span>
+              </div>
+            )}
             {attachedFile && (
               <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-secondary/60 text-xs">
                 <FileText className="w-3 h-3 text-accent" />
                 <span className="text-foreground truncate max-w-[120px]">{attachedFile.name}</span>
+                {attachedFile.extractedText && <span className="text-[10px] text-accent">✓</span>}
                 <button onClick={() => setAttachedFile(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
               </div>
             )}
