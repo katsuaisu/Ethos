@@ -721,6 +721,16 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
               )}
             </div>
           )}
+
+          {/* Convert — in left sidebar */}
+          {phase === "board" && items.length > 0 && (
+            <div className="pt-2 border-t border-border/20">
+              <button onClick={() => setShowConvert(true)} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 transition-colors">
+                <FileOutput className="w-3.5 h-3.5" />
+                Convert to Slides / Doc
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -820,11 +830,7 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
                   </PopoverContent>
                 </Popover>
 
-                {/* Convert button */}
-                <button onClick={() => setShowConvert(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 transition-colors">
-                  <FileOutput className="w-3 h-3" />
-                  Convert
-                </button>
+                {/* Convert button moved to left sidebar */}
               </>
             )}
           </div>
@@ -1249,12 +1255,29 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
     e.stopPropagation();
   };
 
-  const connectors: { x1: number; y1: number; x2: number; y2: number; idx: number }[] = [];
+  // Build connectors with hierarchy-based weight
+  const connectors: { x1: number; y1: number; x2: number; y2: number; idx: number; weight: "primary" | "secondary" }[] = [];
+  const connectionCounts = new Map<string, number>();
   items.forEach((item, i) => {
     if (item.connectedTo) {
       item.connectedTo.forEach(targetIdx => {
         if (targetIdx >= 0 && targetIdx < items.length && targetIdx !== i) {
-          connectors.push({ x1: item.x + 70, y1: item.y + 40, x2: items[targetIdx].x + 70, y2: items[targetIdx].y + 40, idx: i });
+          const key = `${Math.min(i, targetIdx)}-${Math.max(i, targetIdx)}`;
+          if (!connectionCounts.has(key)) {
+            connectionCounts.set(key, 0);
+            const srcW = (item.width || 140) / 2;
+            const srcH = (item.height || 100) / 2;
+            const tgt = items[targetIdx];
+            const tgtW = (tgt.width || 140) / 2;
+            const tgtH = (tgt.height || 100) / 2;
+            // Determine primary (central/branch) vs secondary
+            const isPrimary = item.type === "central" || tgt.type === "central" || item.type === "branch" || tgt.type === "branch";
+            connectors.push({
+              x1: item.x + srcW, y1: item.y + srcH,
+              x2: tgt.x + tgtW, y2: tgt.y + tgtH,
+              idx: i, weight: isPrimary ? "primary" : "secondary",
+            });
+          }
         }
       });
     }
@@ -1284,18 +1307,30 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
         )}
 
         <svg className="absolute inset-0 pointer-events-none" width={displayW} height={displayH}>
+          <defs>
+            <marker id="arrowhead" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill="hsl(var(--accent))" opacity="0.5" />
+            </marker>
+          </defs>
           {connectors.map((c, i) => {
             const sx = (c.x1 / canvasWidth) * displayW;
             const sy = (c.y1 / canvasHeight) * displayH;
             const ex = (c.x2 / canvasWidth) * displayW;
             const ey = (c.y2 / canvasHeight) * displayH;
-            const dx = ex - sx;
-            const mx = sx + dx * 0.5;
-            const my = sy + (ey - sy) * 0.5 - Math.abs(dx) * 0.15;
+            const isPrimary = c.weight === "primary";
+            // Orthogonal routing: go horizontal first, then vertical
+            const midX = (sx + ex) / 2;
             return (
               <g key={i}>
-                <path d={`M ${sx} ${sy} Q ${mx} ${my} ${ex} ${ey}`} fill="none" stroke="hsl(var(--accent))" strokeWidth={1.5} strokeDasharray="6 3" opacity={0.4} />
-                <circle cx={ex} cy={ey} r={3} fill="hsl(var(--accent))" opacity={0.4} />
+                <path
+                  d={`M ${sx} ${sy} C ${midX} ${sy}, ${midX} ${ey}, ${ex} ${ey}`}
+                  fill="none"
+                  stroke="hsl(var(--accent))"
+                  strokeWidth={isPrimary ? 1.8 : 1}
+                  strokeDasharray={isPrimary ? "none" : "5 4"}
+                  opacity={isPrimary ? 0.45 : 0.25}
+                  markerEnd="url(#arrowhead)"
+                />
               </g>
             );
           })}

@@ -134,56 +134,130 @@ const SLIDE_THEMES: SlideTheme[] = [
   },
 ];
 
-// Parse AI-generated markdown into structured slide data
+// ── Slide type detection ──
+type SlideType = "title" | "section-divider" | "content" | "comparison" | "data-heavy" | "visual-heavy" | "quote" | "big-statement";
+
 interface SlideData {
   title: string;
   subtitle?: string;
   bullets: string[];
   notes: string;
-  layout?: "title" | "content" | "two-column" | "quote" | "stats" | "big-statement";
+  slideType: SlideType;
+  leftCol?: string[];
+  rightCol?: string[];
 }
 
-// Strip all markdown formatting so text is clean in slides
+// Strip ALL markdown formatting — aggressive
 function stripMd(text: string): string {
   return text
+    .replace(/\*\*\*(.+?)\*\*\*/g, "$1")
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/\*(.+?)\*/g, "$1")
     .replace(/__(.+?)__/g, "$1")
     .replace(/_(.+?)_/g, "$1")
-    .replace(/`(.+?)`/g, "$1")
+    .replace(/`{1,3}(.+?)`{1,3}/g, "$1")
     .replace(/~~(.+?)~~/g, "$1")
     .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
     .replace(/^#+\s*/, "")
+    .replace(/\*{1,3}/g, "")
+    .replace(/_{1,3}/g, "")
+    .replace(/`/g, "")
+    .replace(/\[/g, "").replace(/\]/g, "")
+    .replace(/\(/g, "(").replace(/\)/g, ")")
     .trim();
+}
+
+// Compress text: max words per bullet, split long paragraphs
+function compressBullet(text: string, maxWords = 18): string {
+  const clean = stripMd(text);
+  const words = clean.split(/\s+/);
+  if (words.length <= maxWords) return clean;
+  return words.slice(0, maxWords).join(" ") + "...";
+}
+
+// Detect slide type from content
+function detectSlideType(title: string, bullets: string[], index: number, total: number): SlideType {
+  if (index === 0) return "title";
+  if (index === total - 1) return "big-statement";
+  
+  const titleLower = title.toLowerCase();
+  
+  // Section divider: short title, 0-1 bullets
+  if (bullets.length <= 1 && title.length < 40) return "section-divider";
+  
+  // Comparison: title suggests comparison, or "vs", "versus", "compared"
+  if (/vs\.?|versus|compar|differ|contrast/i.test(titleLower) || bullets.length >= 4 && bullets.length % 2 === 0) {
+    return "comparison";
+  }
+  
+  // Data-heavy: numbers, percentages, stats
+  const numericBullets = bullets.filter(b => /\d+[%$€£]|\d{2,}/.test(b)).length;
+  if (numericBullets >= 2 || /data|metric|stat|number|kpi|result/i.test(titleLower)) return "data-heavy";
+  
+  // Quote: starts with quote marks or is very short
+  if (/^["'""]/.test(title) || /quote|said|words/i.test(titleLower)) return "quote";
+  
+  // Visual-heavy: few bullets, strong title
+  if (bullets.length <= 2 && title.length > 15) return "visual-heavy";
+  
+  return "content";
 }
 
 function parseSlides(md: string): SlideData[] {
   const slides: SlideData[] = [];
   const sections = md.split(/^## /gm).filter(Boolean);
+  
   for (const section of sections) {
     const lines = section.trim().split("\n");
-    const title = stripMd(lines[0]?.replace(/^#+\s*/, "").replace(/Slide\s*\d+[:\s-]*/i, "").trim() || "Untitled");
+    const rawTitle = lines[0]?.replace(/^#+\s*/, "").replace(/Slide\s*\d+[:\s-]*/i, "").trim() || "Untitled";
+    const title = stripMd(rawTitle);
     const bullets: string[] = [];
     let notes = "";
     let subtitle = "";
-    let layout: SlideData["layout"] = "content";
     let inNotes = false;
+    
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim();
       if (/speaker\s*notes?/i.test(line) || /^notes?:/i.test(line)) { inNotes = true; continue; }
-      if (/^layout:\s*/i.test(line)) { layout = line.replace(/^layout:\s*/i, "").trim() as SlideData["layout"]; continue; }
+      if (/^layout:\s*/i.test(line)) continue; // ignore old layout hints
       if (/^subtitle:\s*/i.test(line)) { subtitle = stripMd(line.replace(/^subtitle:\s*/i, "").trim()); continue; }
       if (inNotes) { if (line) notes += (notes ? " " : "") + stripMd(line.replace(/^[-*]\s*/, "")); continue; }
-      if (line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ")) {
-        bullets.push(stripMd(line.replace(/^[-*•]\s*/, "")));
+      if (line.startsWith("- ") || line.startsWith("* ") || line.startsWith("• ") || /^\d+[.)]\s/.test(line)) {
+        bullets.push(compressBullet(line.replace(/^[-*•]\s*/, "").replace(/^\d+[.)]\s*/, "")));
       } else if (line && !line.startsWith("#") && !line.startsWith("---")) {
         if (!subtitle && bullets.length === 0) subtitle = stripMd(line);
-        else bullets.push(stripMd(line));
+        else bullets.push(compressBullet(line));
       }
     }
-    if (title || bullets.length) slides.push({ title, subtitle, bullets: bullets.slice(0, 8), notes, layout });
+    
+    if (title || bullets.length) {
+      // Auto-split dense slides (max 5 bullets per slide)
+      if (bullets.length > 5) {
+        const firstBatch = bullets.slice(0, 5);
+        const secondBatch = bullets.slice(5);
+        slides.push({ title, subtitle, bullets: firstBatch, notes, slideType: "content" });
+        if (secondBatch.length > 0) {
+          slides.push({ title: title + " (cont.)", subtitle: "", bullets: secondBatch.slice(0, 5), notes: "", slideType: "content" });
+        }
+      } else {
+        slides.push({ title, subtitle, bullets, notes, slideType: "content" });
+      }
+    }
   }
-  return slides.length > 0 ? slides : [{ title: "Board Content", bullets: md.split("\n").filter(l => l.trim()).slice(0, 8).map(stripMd), notes: "" }];
+  
+  // Apply slide type detection
+  const total = slides.length;
+  slides.forEach((s, i) => {
+    s.slideType = detectSlideType(s.title, s.bullets, i, total);
+    // For comparison, split into left/right columns
+    if (s.slideType === "comparison" && s.bullets.length >= 2) {
+      const half = Math.ceil(s.bullets.length / 2);
+      s.leftCol = s.bullets.slice(0, half);
+      s.rightCol = s.bullets.slice(half);
+    }
+  });
+  
+  return slides.length > 0 ? slides : [{ title: "Board Content", subtitle: "", bullets: md.split("\n").filter(l => l.trim()).slice(0, 5).map(l => compressBullet(l)), notes: "", slideType: "title" as SlideType }];
 }
 
 // Parse markdown into document sections
@@ -196,9 +270,9 @@ function parseDocument(md: string): DocSection[] {
     const headingMatch = line.match(/^(#{1,3})\s+(.+)/);
     if (headingMatch) {
       if (current.heading || current.paragraphs.length) sections.push(current);
-      current = { heading: headingMatch[2], level: headingMatch[1].length, paragraphs: [] };
+      current = { heading: stripMd(headingMatch[2]), level: headingMatch[1].length, paragraphs: [] };
     } else if (line.trim()) {
-      current.paragraphs.push(line.replace(/^[-*•]\s*/, "").trim());
+      current.paragraphs.push(stripMd(line.replace(/^[-*•]\s*/, "").trim()));
     }
   }
   if (current.heading || current.paragraphs.length) sections.push(current);
@@ -209,7 +283,7 @@ function parseTable(md: string): string[][] {
   const rows: string[][] = [];
   for (const line of md.split("\n")) {
     if (line.includes("|") && !line.match(/^[\s|:-]+$/)) {
-      const cells = line.split("|").map(c => c.trim()).filter(Boolean);
+      const cells = line.split("|").map(c => stripMd(c.trim())).filter(Boolean);
       if (cells.length > 0) rows.push(cells);
     }
   }
@@ -242,7 +316,10 @@ function addShape(slide: any, type: "rect" | "ellipse" | "roundRect" | "triangle
   slide.addText("", { ...opts, shape: type as any });
 }
 
-// ── Creative PPTX Export Engine ──
+// ══════════════════════════════════════════════════════════════
+// DESIGNER-GRADE PPTX ENGINE
+// Role: Senior Graphic Designer specializing in high-impact decks
+// ══════════════════════════════════════════════════════════════
 
 function exportPPTX(content: string, theme: SlideTheme) {
   const slides = parseSlides(content);
@@ -254,11 +331,28 @@ function exportPPTX(content: string, theme: SlideTheme) {
   const W = 13.33;
   const H = 7.5;
 
+  // ── Typography scale ──
+  const TYPE = {
+    heroTitle: 52,
+    slideTitle: 32,
+    sectionTitle: 44,
+    subtitle: 16,
+    body: 14,
+    caption: 10,
+    stat: 36,
+    quote: 28,
+    label: 9,
+  };
+
+  // ── Spacing system ──
+  const MARGIN = { left: 1.0, right: 1.0, top: 0.7, contentTop: 2.0, bulletSpacing: 0.58 };
+  const CONTENT_W = W - MARGIN.left - MARGIN.right;
+
   // ── Decorative layer helpers ──
-  function addAccentStrip(slide: any, position: "top" | "bottom" | "left") {
-    if (position === "left") addShape(slide, "rect", { x: 0, y: 0, w: 0.06, h: H, fill: { color: theme.accentColor } });
-    if (position === "top") addShape(slide, "rect", { x: 0, y: 0, w: W, h: 0.04, fill: { color: theme.accentColor } });
-    if (position === "bottom") addShape(slide, "rect", { x: 0, y: H - 0.04, w: W, h: 0.04, fill: { color: theme.accentColor } });
+  function addAccentStrip(slide: any, pos: "top" | "bottom" | "left") {
+    if (pos === "left") addShape(slide, "rect", { x: 0, y: 0, w: 0.05, h: H, fill: { color: theme.accentColor } });
+    if (pos === "top") addShape(slide, "rect", { x: 0, y: 0, w: W, h: 0.04, fill: { color: theme.accentColor } });
+    if (pos === "bottom") addShape(slide, "rect", { x: 0, y: H - 0.04, w: W, h: 0.04, fill: { color: theme.accentColor } });
   }
 
   function addCornerBlob(slide: any, corner: "tr" | "bl" | "br", size = 3, transparency = 88) {
@@ -276,433 +370,409 @@ function exportPPTX(content: string, theme: SlideTheme) {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         addShape(slide, "ellipse", {
-          x: startX + c * 0.25, y: startY + r * 0.25, w: 0.06, h: 0.06,
-          fill: { color: theme.accentColor, transparency: 80 },
+          x: startX + c * 0.22, y: startY + r * 0.22, w: 0.05, h: 0.05,
+          fill: { color: theme.accentColor, transparency: 82 },
         });
       }
     }
   }
 
-  function addLineAccent(slide: any, x: number, y: number, w: number, h = 0.03) {
+  function addLineAccent(slide: any, x: number, y: number, w: number, h = 0.035) {
     addShape(slide, "rect", { x, y, w, h, fill: { color: theme.accentColor } });
   }
 
-  // Additional creative decorators
   function addDiamondCluster(slide: any, x: number, y: number, transparency = 85) {
-    const s = 0.3;
-    addShape(slide, "rect", { x, y, w: s, h: s, fill: { color: theme.accentColor, transparency }, rotate: 45 });
-    addShape(slide, "rect", { x: x + 0.4, y: y + 0.15, w: s * 0.6, h: s * 0.6, fill: { color: theme.accent2Color, transparency: transparency - 5 }, rotate: 45 });
-  }
-
-  function addWaveDecor(slide: any, y: number, transparency = 90) {
-    for (let i = 0; i < 8; i++) {
-      addShape(slide, "ellipse", {
-        x: i * 1.7 - 0.3, y: y + (i % 2 === 0 ? 0 : 0.15), w: 2, h: 0.6,
-        fill: { color: i % 2 === 0 ? theme.accentColor : theme.accent2Color, transparency },
-      });
-    }
-  }
-
-  function addCornerTriangles(slide: any) {
-    addShape(slide, "triangle", { x: -0.3, y: -0.3, w: 1.5, h: 1.5, fill: { color: theme.accentColor, transparency: 92 }, rotate: 0 });
-    addShape(slide, "triangle", { x: W - 1.2, y: H - 1.2, w: 1.5, h: 1.5, fill: { color: theme.accent2Color, transparency: 92 }, rotate: 180 });
+    addShape(slide, "rect", { x, y, w: 0.28, h: 0.28, fill: { color: theme.accentColor, transparency }, rotate: 45 });
+    addShape(slide, "rect", { x: x + 0.35, y: y + 0.12, w: 0.18, h: 0.18, fill: { color: theme.accent2Color, transparency: transparency - 5 }, rotate: 45 });
   }
 
   function addSlideNumber(slide: any, num: number, total: number) {
     slide.addText(`${num} / ${total}`, {
-      x: W - 1.5, y: H - 0.5, w: 1.2, h: 0.3,
-      fontSize: 8, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "right",
+      x: W - 1.5, y: H - 0.45, w: 1.2, h: 0.25,
+      fontSize: TYPE.label, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "right",
     });
   }
 
-  const totalSlides = slides.length + 1;
-
-  // ══════════════════════════════════
-  // SLIDE 1: TITLE — Full-bleed hero
-  // ══════════════════════════════════
-  const s1 = pptx.addSlide();
-  s1.background = { color: theme.titleBg };
-
-  // Creative decorations based on theme style
-  addCornerBlob(s1, "tr", 5, 85);
-  addSecondaryBlob(s1, W - 2.5, 0.5, 2.5, 90);
-  addSecondaryBlob(s1, -1, H - 2.5, 3, 93);
-
-  if (theme.style === "elegant" || theme.style === "warm") {
-    addDiamondCluster(s1, W - 3, 5.5);
-    addDotGrid(s1, 1, 5.5, 6, 3);
-  } else if (theme.style === "bold" || theme.style === "retro") {
-    addCornerTriangles(s1);
-    addDotGrid(s1, 1, 5.8, 8, 2);
-  } else if (theme.style === "playful" || theme.style === "nature") {
-    addWaveDecor(s1, H - 0.8, 93);
-    addDiamondCluster(s1, 10, 5.2, 88);
-  } else if (theme.style !== "minimal") {
-    addDotGrid(s1, 1, 5.5, 6, 3);
-  }
-
-  addAccentStrip(s1, "left");
-  addAccentStrip(s1, "bottom");
-
-  // Title text — large and commanding
-  s1.addText(slides[0]?.title || "Presentation", {
-    x: 0.9, y: 1.5, w: 8, h: 2.2,
-    fontSize: 48, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
-    lineSpacingMultiple: 0.9,
-  });
-
-  // Accent line under title
-  addLineAccent(s1, 0.9, 3.8, 2.5, 0.05);
-
-  // Subtitle
-  if (slides[0]?.subtitle) {
-    s1.addText(slides[0].subtitle, {
-      x: 0.9, y: 4.1, w: 8, h: 0.7,
-      fontSize: 18, fontFace: theme.bodyFont, color: theme.subtitleColor,
-      lineSpacingMultiple: 1.3,
+  function addFooter(slide: any) {
+    slide.addText("Ethos", {
+      x: MARGIN.left, y: H - 0.45, w: 2, h: 0.25,
+      fontSize: TYPE.label, fontFace: theme.bodyFont, color: theme.subtitleColor,
     });
   }
 
-  // Footer
-  s1.addText("Ethos", {
-    x: 0.9, y: H - 0.7, w: 3, h: 0.35,
-    fontSize: 10, fontFace: theme.bodyFont, color: theme.subtitleColor,
-  });
+  // ── Theme-specific decorations ──
+  function addThemeDecor(slide: any, slideType: SlideType, idx: number) {
+    if (theme.style === "elegant" || theme.style === "warm") {
+      if (idx % 3 === 0) addDiamondCluster(slide, W - 2.5, H - 1.5);
+      if (idx % 4 === 0) addDotGrid(slide, 0.5, H - 0.8, 5, 2);
+    } else if (theme.style === "bold" || theme.style === "retro") {
+      if (idx % 2 === 0) addCornerBlob(slide, "br", 2, 93);
+    } else if (theme.style === "playful" || theme.style === "nature") {
+      if (idx % 3 === 0) addSecondaryBlob(slide, W - 1.5, 0.5, 1.2, 93);
+    } else if (theme.style === "dark") {
+      addCornerBlob(slide, "tr", 3, 95);
+    }
+  }
 
-  addSlideNumber(s1, 1, totalSlides);
+  const totalSlides = slides.length + 1; // +1 for end slide
 
-  // ══════════════════════════════════
-  // CONTENT SLIDES — Varied layouts
-  // ══════════════════════════════════
-  for (let i = 1; i < slides.length; i++) {
-    const sd = slides[i];
+  // ══════════════════════════════════════════════
+  // Render each slide by type
+  // ══════════════════════════════════════════════
+
+  slides.forEach((sd, i) => {
     const slide = pptx.addSlide();
-    slide.background = { color: theme.contentBg };
-
-    // Decide layout variation based on slide index
-    const layoutType = sd.layout === "quote" ? "quote"
-      : sd.layout === "two-column" ? "two-column"
-      : sd.layout === "stats" ? "stats"
-      : sd.layout === "big-statement" ? "big-statement"
-      : i % 5 === 1 ? "left-accent"
-      : i % 5 === 2 ? "right-visual"
-      : i % 5 === 3 ? "split"
-      : i % 5 === 4 ? "centered"
-      : "standard";
-
-    // ── Always add subtle decorations ──
+    slide.background = { color: i === 0 ? theme.titleBg : theme.contentBg };
     addAccentStrip(slide, "left");
-    if (i % 2 === 0) addCornerBlob(slide, "br", 2.5, 93);
-    if (i % 3 === 0) addSecondaryBlob(slide, W - 1.5, 0.3, 1.5, 94);
-    if (i % 4 === 0) addDiamondCluster(slide, W - 2, H - 1.5, 90);
-    if (i % 5 === 0 && theme.style !== "minimal") addDotGrid(slide, 0.5, H - 1, 4, 2);
-
     addSlideNumber(slide, i + 1, totalSlides);
+    addFooter(slide);
+    addThemeDecor(slide, sd.slideType, i);
 
-    // ── Layout: STANDARD ──
-    if (layoutType === "standard") {
-      // Title with accent underline
-      slide.addText(sd.title, {
-        x: 0.9, y: 0.5, w: 10, h: 0.8,
-        fontSize: 30, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+    switch (sd.slideType) {
+      case "title":
+        renderTitleSlide(slide, sd);
+        break;
+      case "section-divider":
+        renderSectionDivider(slide, sd);
+        break;
+      case "comparison":
+        renderComparisonSlide(slide, sd);
+        break;
+      case "data-heavy":
+        renderDataSlide(slide, sd);
+        break;
+      case "quote":
+        renderQuoteSlide(slide, sd);
+        break;
+      case "big-statement":
+        renderBigStatement(slide, sd);
+        break;
+      case "visual-heavy":
+        renderVisualHeavy(slide, sd);
+        break;
+      default:
+        renderContentSlide(slide, sd, i);
+        break;
+    }
+
+    if (sd.notes) slide.addNotes(sd.notes);
+  });
+
+  // ── TITLE SLIDE ──
+  function renderTitleSlide(slide: any, sd: SlideData) {
+    addCornerBlob(slide, "tr", 5, 85);
+    addSecondaryBlob(slide, -1, H - 2.5, 3, 93);
+    addAccentStrip(slide, "bottom");
+
+    // Large hero title
+    slide.addText(sd.title, {
+      x: MARGIN.left, y: 1.4, w: 8.5, h: 2.5,
+      fontSize: TYPE.heroTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+      lineSpacingMultiple: 0.9,
+    });
+
+    addLineAccent(slide, MARGIN.left, 4.1, 2.8, 0.05);
+
+    if (sd.subtitle) {
+      slide.addText(sd.subtitle, {
+        x: MARGIN.left, y: 4.4, w: 8, h: 0.7,
+        fontSize: TYPE.subtitle + 2, fontFace: theme.bodyFont, color: theme.subtitleColor,
+        lineSpacingMultiple: 1.4,
       });
-      addLineAccent(slide, 0.9, 1.35, 1.8);
+    }
+
+    // Decorative visual block on right
+    addShape(slide, "roundRect", {
+      x: 9.5, y: 1.5, w: 3, h: 4, fill: { color: theme.accentColor, transparency: 92 }, rectRadius: 0.12,
+    });
+    addShape(slide, "ellipse", { x: 10, y: 2, w: 2, h: 2, fill: { color: theme.accentColor, transparency: 85 } });
+    addShape(slide, "ellipse", { x: 10.5, y: 2.5, w: 1, h: 1, fill: { color: theme.accent2Color, transparency: 78 } });
+    addDotGrid(slide, 9.8, 4.5, 6, 3);
+  }
+
+  // ── SECTION DIVIDER ──
+  function renderSectionDivider(slide: any, sd: SlideData) {
+    slide.background = { color: theme.titleBg };
+    addCornerBlob(slide, "tr", 4, 88);
+    addSecondaryBlob(slide, -0.5, H - 2, 2.5, 92);
+
+    slide.addText(sd.title, {
+      x: 1.5, y: 2, w: W - 3, h: 2,
+      fontSize: TYPE.sectionTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+      align: "center", lineSpacingMultiple: 1.0,
+    });
+
+    addLineAccent(slide, W / 2 - 1.2, 4.3, 2.4, 0.05);
+
+    if (sd.subtitle || sd.bullets.length > 0) {
+      const subText = sd.subtitle || sd.bullets[0] || "";
+      slide.addText(subText, {
+        x: 2.5, y: 4.7, w: W - 5, h: 0.6,
+        fontSize: TYPE.subtitle, fontFace: theme.bodyFont, color: theme.subtitleColor,
+        align: "center",
+      });
+    }
+  }
+
+  // ── CONTENT SLIDE — varied layouts ──
+  function renderContentSlide(slide: any, sd: SlideData, idx: number) {
+    const variation = idx % 3;
+
+    if (variation === 0) {
+      // Standard: title top, numbered bullets below
+      slide.addText(sd.title, {
+        x: MARGIN.left, y: MARGIN.top, w: CONTENT_W, h: 0.9,
+        fontSize: TYPE.slideTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+      });
+      addLineAccent(slide, MARGIN.left, 1.65, 2.0);
 
       if (sd.subtitle) {
         slide.addText(sd.subtitle, {
-          x: 0.9, y: 1.55, w: 10, h: 0.5,
-          fontSize: 14, fontFace: theme.bodyFont, color: theme.subtitleColor, italic: true,
+          x: MARGIN.left, y: 1.85, w: CONTENT_W, h: 0.4,
+          fontSize: TYPE.subtitle - 2, fontFace: theme.bodyFont, color: theme.subtitleColor, italic: true,
         });
       }
 
-      // Bullets with numbered markers
-      if (sd.bullets.length > 0) {
-        const bulletTexts = sd.bullets.map((b, idx) => ({
-          text: `  ${b}`,
-          options: {
-            fontSize: 14, color: theme.textColor, paraSpaceBefore: 10, lineSpacing: 24,
-            bullet: false,
-          },
-        }));
+      sd.bullets.forEach((b, bi) => {
+        const yPos = MARGIN.contentTop + 0.3 + bi * MARGIN.bulletSpacing;
+        if (yPos < 6.5) {
+          // Accent marker
+          addShape(slide, "ellipse", {
+            x: MARGIN.left, y: yPos + 0.04, w: 0.28, h: 0.28,
+            fill: { color: theme.accentColor, transparency: 15 },
+          });
+          slide.addText(`${bi + 1}`, {
+            x: MARGIN.left, y: yPos + 0.04, w: 0.28, h: 0.28,
+            fontSize: TYPE.label, fontFace: theme.bodyFont, color: isDark ? "FFFFFF" : theme.accentColor,
+            align: "center", valign: "middle", bold: true,
+          });
+          slide.addText(b, {
+            x: MARGIN.left + 0.5, y: yPos, w: CONTENT_W - 0.5, h: 0.4,
+            fontSize: TYPE.body, fontFace: theme.bodyFont, color: theme.textColor, valign: "middle",
+          });
+        }
+      });
+    } else if (variation === 1) {
+      // Left accent panel + content right
+      addShape(slide, "rect", { x: 0, y: 0, w: 4.0, h: H, fill: { color: theme.accentColor, transparency: 6 } });
+      addShape(slide, "rect", { x: 4.0, y: 0, w: 0.03, h: H, fill: { color: theme.accentColor, transparency: 40 } });
 
-        // Custom numbered circles
-        sd.bullets.forEach((b, idx) => {
-          const yPos = 2.2 + idx * 0.6;
-          if (yPos < 6.5) {
-            // Number circle
-            addShape(slide, "ellipse", {
-              x: 0.9, y: yPos, w: 0.35, h: 0.35,
-              fill: { color: theme.accentColor, transparency: 15 },
-            });
-            slide.addText(`${idx + 1}`, {
-              x: 0.9, y: yPos, w: 0.35, h: 0.35,
-              fontSize: 10, fontFace: theme.bodyFont, color: isDark ? "FFFFFF" : theme.accentColor,
-              align: "center", valign: "middle", bold: true,
-            });
-            // Bullet text
-            slide.addText(b, {
-              x: 1.45, y: yPos, w: 9.5, h: 0.35,
-              fontSize: 14, fontFace: theme.bodyFont, color: theme.textColor,
-              valign: "middle",
-            });
-          }
-        });
-      }
-    }
-
-    // ── Layout: LEFT-ACCENT (large accent panel on left) ──
-    else if (layoutType === "left-accent") {
-      // Colored panel on left third
-      addShape(slide, "rect", { x: 0, y: 0, w: 4.2, h: H, fill: { color: theme.accentColor, transparency: 8 } });
-      addShape(slide, "rect", { x: 4.2, y: 0, w: 0.03, h: H, fill: { color: theme.accentColor, transparency: 40 } });
-
-      // Title on left panel
       slide.addText(sd.title, {
-        x: 0.6, y: 1.2, w: 3.3, h: 2,
-        fontSize: 28, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+        x: 0.6, y: 1.2, w: 3.2, h: 2,
+        fontSize: TYPE.slideTitle - 4, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
         lineSpacingMultiple: 0.95,
       });
       addLineAccent(slide, 0.6, 3.3, 1.2);
 
       if (sd.subtitle) {
         slide.addText(sd.subtitle, {
-          x: 0.6, y: 3.6, w: 3.3, h: 0.8,
-          fontSize: 12, fontFace: theme.bodyFont, color: theme.subtitleColor, italic: true,
-          lineSpacingMultiple: 1.3,
+          x: 0.6, y: 3.6, w: 3.2, h: 0.6,
+          fontSize: TYPE.subtitle - 3, fontFace: theme.bodyFont, color: theme.subtitleColor, italic: true,
         });
       }
 
-      // Content on right
-      sd.bullets.forEach((b, idx) => {
-        const yPos = 1.2 + idx * 0.7;
+      sd.bullets.forEach((b, bi) => {
+        const yPos = 1.2 + bi * 0.65;
         if (yPos < 6.5) {
-          // Dash accent
-          addShape(slide, "rect", { x: 4.8, y: yPos + 0.12, w: 0.2, h: 0.03, fill: { color: theme.accentColor } });
+          addShape(slide, "rect", { x: 4.7, y: yPos + 0.12, w: 0.18, h: 0.03, fill: { color: theme.accentColor } });
           slide.addText(b, {
-            x: 5.2, y: yPos, w: 7.5, h: 0.5,
-            fontSize: 14, fontFace: theme.bodyFont, color: theme.textColor,
-            lineSpacingMultiple: 1.2,
+            x: 5.1, y: yPos, w: 7.5, h: 0.5,
+            fontSize: TYPE.body, fontFace: theme.bodyFont, color: theme.textColor,
           });
         }
       });
-    }
-
-    // ── Layout: RIGHT-VISUAL (content left, visual placeholder right) ──
-    else if (layoutType === "right-visual") {
-      slide.addText(sd.title, {
-        x: 0.9, y: 0.5, w: 7, h: 0.8,
-        fontSize: 30, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
-      });
-      addLineAccent(slide, 0.9, 1.35, 1.5);
-
-      sd.bullets.forEach((b, idx) => {
-        const yPos = 1.8 + idx * 0.55;
-        if (yPos < 6) {
-          slide.addText(`\u2014  ${b}`, {
-            x: 0.9, y: yPos, w: 7, h: 0.4,
-            fontSize: 13, fontFace: theme.bodyFont, color: theme.textColor,
-          });
-        }
-      });
-
-      // Visual placeholder block on right
-      addShape(slide, "roundRect", {
-        x: 8.8, y: 0.8, w: 3.8, h: 5.5,
-        fill: { color: theme.accentColor, transparency: 90 },
-        rectRadius: 0.15,
-      });
-      // Inner decorative elements
-      addShape(slide, "ellipse", { x: 9.5, y: 1.8, w: 2.4, h: 2.4, fill: { color: theme.accentColor, transparency: 82 } });
-      addShape(slide, "ellipse", { x: 10, y: 2.3, w: 1.4, h: 1.4, fill: { color: theme.accent2Color, transparency: 75 } });
-      addDotGrid(slide, 9.2, 5, 8, 3);
-    }
-
-    // ── Layout: SPLIT (50/50 horizontal) ──
-    else if (layoutType === "split") {
-      // Top half — title area with accent bg
-      addShape(slide, "rect", { x: 0, y: 0, w: W, h: 3.2, fill: { color: theme.accentColor, transparency: 6 } });
-      addShape(slide, "rect", { x: 0, y: 3.2, w: W, h: 0.03, fill: { color: theme.accentColor, transparency: 50 } });
-
-      slide.addText(sd.title, {
-        x: 0.9, y: 0.6, w: 11, h: 1,
-        fontSize: 32, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
-      });
-
-      if (sd.subtitle) {
-        slide.addText(sd.subtitle, {
-          x: 0.9, y: 1.7, w: 11, h: 0.6,
-          fontSize: 14, fontFace: theme.bodyFont, color: theme.subtitleColor,
-        });
-      }
-
-      // Accent dot cluster top-right
-      addShape(slide, "ellipse", { x: W - 2, y: 0.3, w: 0.8, h: 0.8, fill: { color: theme.accentColor, transparency: 85 } });
-      addShape(slide, "ellipse", { x: W - 1.5, y: 0.8, w: 0.5, h: 0.5, fill: { color: theme.accent2Color, transparency: 80 } });
-
-      // Bottom half — content in two columns
-      const half = Math.ceil(sd.bullets.length / 2);
-      const col1 = sd.bullets.slice(0, half);
-      const col2 = sd.bullets.slice(half);
-
-      col1.forEach((b, idx) => {
-        const yPos = 3.7 + idx * 0.6;
-        addShape(slide, "rect", { x: 0.9, y: yPos + 0.06, w: 0.12, h: 0.12, fill: { color: theme.accentColor } });
-        slide.addText(b, {
-          x: 1.25, y: yPos - 0.05, w: 5, h: 0.45,
-          fontSize: 13, fontFace: theme.bodyFont, color: theme.textColor,
-        });
-      });
-
-      col2.forEach((b, idx) => {
-        const yPos = 3.7 + idx * 0.6;
-        addShape(slide, "rect", { x: 7, y: yPos + 0.06, w: 0.12, h: 0.12, fill: { color: theme.accentColor } });
-        slide.addText(b, {
-          x: 7.35, y: yPos - 0.05, w: 5, h: 0.45,
-          fontSize: 13, fontFace: theme.bodyFont, color: theme.textColor,
-        });
-      });
-    }
-
-    // ── Layout: CENTERED (minimal, big text) ──
-    else if (layoutType === "centered") {
-      // Center everything
-      addSecondaryBlob(slide, 1, 1, 2, 95);
+    } else {
+      // Centered minimal
+      addSecondaryBlob(slide, 1, 0.5, 1.5, 95);
       addCornerBlob(slide, "br", 2, 94);
 
       slide.addText(sd.title, {
-        x: 1.5, y: 0.8, w: W - 3, h: 1.2,
-        fontSize: 34, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+        x: 1.5, y: MARGIN.top, w: W - 3, h: 1,
+        fontSize: TYPE.slideTitle + 2, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
         align: "center",
       });
-      addLineAccent(slide, W / 2 - 0.75, 2.1, 1.5);
+      addLineAccent(slide, W / 2 - 0.8, 1.9, 1.6);
 
-      sd.bullets.forEach((b, idx) => {
-        const yPos = 2.6 + idx * 0.6;
+      sd.bullets.forEach((b, bi) => {
+        const yPos = 2.4 + bi * MARGIN.bulletSpacing;
         if (yPos < 6.5) {
           slide.addText(b, {
-            x: 2, y: yPos, w: W - 4, h: 0.45,
-            fontSize: 14, fontFace: theme.bodyFont, color: theme.textColor,
+            x: 2, y: yPos, w: W - 4, h: 0.42,
+            fontSize: TYPE.body, fontFace: theme.bodyFont, color: theme.textColor,
             align: "center",
           });
         }
       });
     }
-
-    // ── Layout: QUOTE ──
-    else if (layoutType === "quote") {
-      addCornerBlob(slide, "tr", 4, 90);
-      addSecondaryBlob(slide, 0.5, H - 2, 2, 93);
-
-      // Big quotation mark
-      slide.addText("\u201C", {
-        x: 1, y: 0.5, w: 2, h: 2,
-        fontSize: 120, fontFace: theme.titleFont, color: theme.accentColor, bold: true,
-        transparency: 30,
-      });
-
-      slide.addText(sd.title, {
-        x: 1.5, y: 2, w: 10, h: 2,
-        fontSize: 26, fontFace: theme.titleFont, color: theme.titleColor, italic: true,
-        lineSpacingMultiple: 1.3, align: "center",
-      });
-
-      if (sd.subtitle) {
-        addLineAccent(slide, W / 2 - 0.5, 4.3, 1);
-        slide.addText(sd.subtitle, {
-          x: 2, y: 4.6, w: W - 4, h: 0.5,
-          fontSize: 14, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "center",
-        });
-      }
-    }
-
-    // ── Layout: TWO-COLUMN ──
-    else if (layoutType === "two-column") {
-      slide.addText(sd.title, {
-        x: 0.9, y: 0.5, w: 11, h: 0.8,
-        fontSize: 30, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
-      });
-      addLineAccent(slide, 0.9, 1.35, 2);
-
-      // Divider line
-      addShape(slide, "rect", { x: W / 2 - 0.015, y: 1.8, w: 0.03, h: 4.5, fill: { color: theme.accentColor, transparency: 60 } });
-
-      const half = Math.ceil(sd.bullets.length / 2);
-      sd.bullets.slice(0, half).forEach((b, idx) => {
-        slide.addText(b, {
-          x: 0.9, y: 1.9 + idx * 0.65, w: 5.5, h: 0.5,
-          fontSize: 13, fontFace: theme.bodyFont, color: theme.textColor,
-        });
-      });
-      sd.bullets.slice(half).forEach((b, idx) => {
-        slide.addText(b, {
-          x: 7, y: 1.9 + idx * 0.65, w: 5.5, h: 0.5,
-          fontSize: 13, fontFace: theme.bodyFont, color: theme.textColor,
-        });
-      });
-    }
-
-    // ── Layout: STATS ──
-    else if (layoutType === "stats") {
-      slide.addText(sd.title, {
-        x: 0.9, y: 0.5, w: 11, h: 0.8,
-        fontSize: 30, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
-      });
-      addLineAccent(slide, 0.9, 1.35, 1.5);
-
-      // Display bullets as "stat cards"
-      const cardW = 3.5;
-      const cols = Math.min(sd.bullets.length, 3);
-      const startX = (W - cols * cardW - (cols - 1) * 0.4) / 2;
-
-      sd.bullets.slice(0, 6).forEach((b, idx) => {
-        const col = idx % 3;
-        const row = Math.floor(idx / 3);
-        const cx = startX + col * (cardW + 0.4);
-        const cy = 2.2 + row * 2.5;
-
-        addShape(slide, "roundRect", {
-          x: cx, y: cy, w: cardW, h: 2,
-          fill: { color: theme.accentColor, transparency: 93 },
-          rectRadius: 0.1,
-        });
-        addShape(slide, "rect", { x: cx, y: cy, w: cardW, h: 0.05, fill: { color: theme.accentColor } });
-        slide.addText(b, {
-          x: cx + 0.3, y: cy + 0.4, w: cardW - 0.6, h: 1.2,
-          fontSize: 13, fontFace: theme.bodyFont, color: theme.textColor,
-          valign: "middle", align: "center",
-          lineSpacingMultiple: 1.2,
-        });
-      });
-    }
-
-    // ── Layout: BIG-STATEMENT ──
-    else if (layoutType === "big-statement") {
-      addCornerBlob(slide, "tr", 5, 88);
-      addSecondaryBlob(slide, -1, H - 3, 3, 92);
-
-      slide.addText(sd.title, {
-        x: 1, y: 1.5, w: W - 2, h: 3,
-        fontSize: 42, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
-        align: "center", lineSpacingMultiple: 1.1,
-      });
-      addLineAccent(slide, W / 2 - 1, 4.8, 2);
-
-      if (sd.bullets.length > 0) {
-        slide.addText(sd.bullets[0], {
-          x: 2, y: 5.2, w: W - 4, h: 0.6,
-          fontSize: 16, fontFace: theme.bodyFont, color: theme.subtitleColor,
-          align: "center",
-        });
-      }
-    }
-
-    // Speaker notes
-    if (sd.notes) slide.addNotes(sd.notes);
   }
 
-  // ══════════════════════════════════
-  // END SLIDE — Elegant closing
-  // ══════════════════════════════════
+  // ── COMPARISON SLIDE ──
+  function renderComparisonSlide(slide: any, sd: SlideData) {
+    slide.addText(sd.title, {
+      x: MARGIN.left, y: MARGIN.top, w: CONTENT_W, h: 0.9,
+      fontSize: TYPE.slideTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+    });
+    addLineAccent(slide, MARGIN.left, 1.65, 2.0);
+
+    // Divider
+    addShape(slide, "rect", { x: W / 2 - 0.015, y: 2.0, w: 0.03, h: 4.5, fill: { color: theme.accentColor, transparency: 50 } });
+
+    const left = sd.leftCol || sd.bullets.slice(0, Math.ceil(sd.bullets.length / 2));
+    const right = sd.rightCol || sd.bullets.slice(Math.ceil(sd.bullets.length / 2));
+
+    left.forEach((b, bi) => {
+      const yPos = 2.2 + bi * 0.6;
+      addShape(slide, "rect", { x: MARGIN.left, y: yPos + 0.06, w: 0.1, h: 0.1, fill: { color: theme.accentColor } });
+      slide.addText(b, {
+        x: MARGIN.left + 0.3, y: yPos, w: 5.2, h: 0.45,
+        fontSize: TYPE.body - 1, fontFace: theme.bodyFont, color: theme.textColor,
+      });
+    });
+
+    right.forEach((b, bi) => {
+      const yPos = 2.2 + bi * 0.6;
+      addShape(slide, "rect", { x: W / 2 + 0.4, y: yPos + 0.06, w: 0.1, h: 0.1, fill: { color: theme.accent2Color } });
+      slide.addText(b, {
+        x: W / 2 + 0.7, y: yPos, w: 5.2, h: 0.45,
+        fontSize: TYPE.body - 1, fontFace: theme.bodyFont, color: theme.textColor,
+      });
+    });
+  }
+
+  // ── DATA-HEAVY SLIDE — stat cards ──
+  function renderDataSlide(slide: any, sd: SlideData) {
+    slide.addText(sd.title, {
+      x: MARGIN.left, y: MARGIN.top, w: CONTENT_W, h: 0.9,
+      fontSize: TYPE.slideTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+    });
+    addLineAccent(slide, MARGIN.left, 1.65, 1.5);
+
+    const cols = Math.min(sd.bullets.length, 3);
+    const cardW = 3.4;
+    const startX = (W - cols * cardW - (cols - 1) * 0.4) / 2;
+
+    sd.bullets.slice(0, 6).forEach((b, bi) => {
+      const col = bi % 3;
+      const row = Math.floor(bi / 3);
+      const cx = startX + col * (cardW + 0.4);
+      const cy = 2.2 + row * 2.5;
+
+      addShape(slide, "roundRect", {
+        x: cx, y: cy, w: cardW, h: 2,
+        fill: { color: theme.accentColor, transparency: 93 }, rectRadius: 0.1,
+      });
+      addShape(slide, "rect", { x: cx, y: cy, w: cardW, h: 0.05, fill: { color: theme.accentColor } });
+      
+      // Try to extract a number from the bullet
+      const numMatch = b.match(/(\d[\d,.%$€£]*)/);
+      if (numMatch) {
+        slide.addText(numMatch[0], {
+          x: cx + 0.3, y: cy + 0.3, w: cardW - 0.6, h: 0.7,
+          fontSize: TYPE.stat, fontFace: theme.titleFont, color: theme.accentColor,
+          align: "center", bold: true,
+        });
+        const label = b.replace(numMatch[0], "").replace(/^[:\s-]+/, "").trim();
+        slide.addText(label || b, {
+          x: cx + 0.3, y: cy + 1.1, w: cardW - 0.6, h: 0.6,
+          fontSize: TYPE.body - 2, fontFace: theme.bodyFont, color: theme.textColor,
+          align: "center", lineSpacingMultiple: 1.2,
+        });
+      } else {
+        slide.addText(b, {
+          x: cx + 0.3, y: cy + 0.4, w: cardW - 0.6, h: 1.2,
+          fontSize: TYPE.body, fontFace: theme.bodyFont, color: theme.textColor,
+          align: "center", valign: "middle",
+        });
+      }
+    });
+  }
+
+  // ── QUOTE SLIDE ──
+  function renderQuoteSlide(slide: any, sd: SlideData) {
+    slide.background = { color: theme.titleBg };
+    addCornerBlob(slide, "tr", 4, 90);
+    addSecondaryBlob(slide, 0.5, H - 2, 2, 93);
+
+    slide.addText("\u201C", {
+      x: 1, y: 0.5, w: 2, h: 2,
+      fontSize: 120, fontFace: theme.titleFont, color: theme.accentColor, bold: true, transparency: 30,
+    });
+
+    const quoteText = sd.title.replace(/^["'""]+|["'""]+$/g, "");
+    slide.addText(quoteText, {
+      x: 1.5, y: 2, w: 10, h: 2.5,
+      fontSize: TYPE.quote, fontFace: theme.titleFont, color: theme.titleColor, italic: true,
+      lineSpacingMultiple: 1.3, align: "center",
+    });
+
+    if (sd.subtitle || sd.bullets.length > 0) {
+      addLineAccent(slide, W / 2 - 0.5, 4.8, 1);
+      slide.addText(sd.subtitle || sd.bullets[0] || "", {
+        x: 2, y: 5.1, w: W - 4, h: 0.5,
+        fontSize: TYPE.subtitle, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "center",
+      });
+    }
+  }
+
+  // ── BIG STATEMENT / CLOSING ──
+  function renderBigStatement(slide: any, sd: SlideData) {
+    slide.background = { color: theme.titleBg };
+    addCornerBlob(slide, "tr", 5, 88);
+    addSecondaryBlob(slide, -1, H - 3, 3, 92);
+    addAccentStrip(slide, "bottom");
+
+    slide.addText(sd.title, {
+      x: 1, y: 1.5, w: W - 2, h: 3,
+      fontSize: TYPE.sectionTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+      align: "center", lineSpacingMultiple: 1.1,
+    });
+    addLineAccent(slide, W / 2 - 1, 4.8, 2);
+
+    if (sd.bullets.length > 0) {
+      slide.addText(sd.bullets[0], {
+        x: 2, y: 5.2, w: W - 4, h: 0.6,
+        fontSize: TYPE.subtitle, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "center",
+      });
+    }
+  }
+
+  // ── VISUAL-HEAVY SLIDE ──
+  function renderVisualHeavy(slide: any, sd: SlideData) {
+    // Content left, large visual block right
+    slide.addText(sd.title, {
+      x: MARGIN.left, y: MARGIN.top, w: 7, h: 1,
+      fontSize: TYPE.slideTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true,
+    });
+    addLineAccent(slide, MARGIN.left, 1.8, 1.5);
+
+    if (sd.subtitle) {
+      slide.addText(sd.subtitle, {
+        x: MARGIN.left, y: 2.1, w: 7, h: 0.5,
+        fontSize: TYPE.subtitle - 2, fontFace: theme.bodyFont, color: theme.subtitleColor,
+      });
+    }
+
+    sd.bullets.forEach((b, bi) => {
+      const yPos = 2.8 + bi * 0.55;
+      if (yPos < 6) {
+        slide.addText("\u2014  " + b, {
+          x: MARGIN.left, y: yPos, w: 7, h: 0.4,
+          fontSize: TYPE.body, fontFace: theme.bodyFont, color: theme.textColor,
+        });
+      }
+    });
+
+    // Visual placeholder
+    addShape(slide, "roundRect", {
+      x: 8.8, y: 0.8, w: 3.8, h: 5.5,
+      fill: { color: theme.accentColor, transparency: 90 }, rectRadius: 0.15,
+    });
+    addShape(slide, "ellipse", { x: 9.5, y: 1.8, w: 2.4, h: 2.4, fill: { color: theme.accentColor, transparency: 82 } });
+    addShape(slide, "ellipse", { x: 10, y: 2.3, w: 1.4, h: 1.4, fill: { color: theme.accent2Color, transparency: 75 } });
+    addDotGrid(slide, 9.2, 5, 8, 3);
+  }
+
+  // ── END SLIDE ──
   const endSlide = pptx.addSlide();
   endSlide.background = { color: theme.titleBg };
   addAccentStrip(endSlide, "left");
@@ -712,23 +782,23 @@ function exportPPTX(content: string, theme: SlideTheme) {
 
   endSlide.addText("Thank You", {
     x: 1, y: 2, w: W - 2, h: 1.5,
-    fontSize: 44, fontFace: theme.titleFont, color: theme.titleColor, bold: true, align: "center",
+    fontSize: TYPE.sectionTitle, fontFace: theme.titleFont, color: theme.titleColor, bold: true, align: "center",
   });
   addLineAccent(endSlide, W / 2 - 1, 3.7, 2);
   endSlide.addText("Made with Ethos", {
     x: 1, y: 4.2, w: W - 2, h: 0.5,
-    fontSize: 13, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "center",
+    fontSize: TYPE.body - 1, fontFace: theme.bodyFont, color: theme.subtitleColor, align: "center",
   });
-
   addSlideNumber(endSlide, totalSlides, totalSlides);
+  addFooter(endSlide);
 
   pptx.writeFile({ fileName: "ethos-presentation.pptx" });
   toast.success("Downloaded presentation");
 }
 
-// ── PDF, DOCX, XLSX exports ──
+// ── PDF export ──
 
-function exportPDF(content: string, format: OutputFormat) {
+function exportPDF(content: string, _format: OutputFormat) {
   const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
   const pageWidth = pdf.internal.pageSize.getWidth();
   const margin = 20;
@@ -750,28 +820,25 @@ function exportPDF(content: string, format: OutputFormat) {
   const lines = content.split("\n");
   for (const line of lines) {
     addPageIfNeeded();
-    const trimmed = line.trim();
+    const trimmed = stripMd(line.trim());
     if (!trimmed) { y += 4; continue; }
-    if (trimmed.startsWith("## ")) {
+    if (line.trim().startsWith("## ")) {
       y += 6; pdf.setFontSize(16); pdf.setFont("helvetica", "bold"); pdf.setTextColor(26, 26, 46);
-      const wrapped = pdf.splitTextToSize(trimmed.replace(/^##\s*/, ""), maxWidth);
+      const wrapped = pdf.splitTextToSize(trimmed, maxWidth);
       pdf.text(wrapped, margin, y); y += wrapped.length * 7 + 3;
-    } else if (trimmed.startsWith("### ")) {
+    } else if (line.trim().startsWith("### ")) {
       y += 4; pdf.setFontSize(13); pdf.setFont("helvetica", "bold"); pdf.setTextColor(50, 50, 70);
-      const wrapped = pdf.splitTextToSize(trimmed.replace(/^###\s*/, ""), maxWidth);
+      const wrapped = pdf.splitTextToSize(trimmed, maxWidth);
       pdf.text(wrapped, margin, y); y += wrapped.length * 6 + 2;
-    } else if (trimmed.startsWith("# ")) {
+    } else if (line.trim().startsWith("# ")) {
       y += 6; pdf.setFontSize(20); pdf.setFont("helvetica", "bold"); pdf.setTextColor(26, 26, 46);
-      const wrapped = pdf.splitTextToSize(trimmed.replace(/^#\s*/, ""), maxWidth);
+      const wrapped = pdf.splitTextToSize(trimmed, maxWidth);
       pdf.text(wrapped, margin, y); y += wrapped.length * 8 + 4;
-    } else if (trimmed.startsWith("- ") || trimmed.startsWith("* ") || trimmed.startsWith("• ")) {
+    } else if (/^[-*•]/.test(line.trim())) {
       pdf.setFontSize(11); pdf.setFont("helvetica", "normal"); pdf.setTextColor(60, 60, 80);
-      const bullet = "\u2022  " + trimmed.replace(/^[-*•]\s*/, "");
+      const bullet = "\u2022  " + trimmed;
       const wrapped = pdf.splitTextToSize(bullet, maxWidth - 5);
       pdf.text(wrapped, margin + 5, y); y += wrapped.length * 5 + 2;
-    } else if (trimmed.includes("|")) {
-      pdf.setFontSize(9); pdf.setFont("helvetica", "normal"); pdf.setTextColor(50, 50, 70);
-      pdf.text(trimmed, margin, y); y += 5;
     } else {
       pdf.setFontSize(11); pdf.setFont("helvetica", "normal"); pdf.setTextColor(60, 60, 80);
       const wrapped = pdf.splitTextToSize(trimmed, maxWidth);
@@ -787,6 +854,8 @@ function exportPDF(content: string, format: OutputFormat) {
   pdf.save("ethos-export.pdf");
   toast.success("Downloaded PDF");
 }
+
+// ── DOCX export — structured document with heading hierarchy ──
 
 function exportDOCX(content: string, docStyle: DocStyle) {
   const sections = parseDocument(content);
@@ -805,7 +874,7 @@ function exportDOCX(content: string, docStyle: DocStyle) {
     }
     for (const para of section.paragraphs) {
       children.push(new Paragraph({
-        children: [new TextRun({ text: para.replace(/^[-*•]\s*/, ""), size: 22, font: "Calibri" })],
+        children: [new TextRun({ text: para, size: 22, font: "Calibri" })],
         spacing: { after: 80 },
       }));
     }
@@ -822,7 +891,7 @@ function exportXLSX(content: string) {
   const rows = parseTable(content);
   if (rows.length === 0) {
     const lines = content.split("\n").filter(l => l.trim());
-    const ws = XLSX.utils.aoa_to_sheet([["Content"], ...lines.map(l => [l.replace(/^[-*•#|]\s*/, "").trim()])]);
+    const ws = XLSX.utils.aoa_to_sheet([["Content"], ...lines.map(l => [stripMd(l.replace(/^[-*•#|]\s*/, "").trim())])]);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Board Export");
     XLSX.writeFile(wb, "ethos-export.xlsx");
@@ -885,13 +954,49 @@ export default function ConvertDialog({ items, onClose }: ConvertDialogProps) {
     const moodContext = moodboardDesc ? `\n\nMoodboard/Inspiration: ${moodboardDesc}` : "";
 
     const formatPrompts: Record<OutputFormat, string> = {
-      slides: `Convert this board content into a beautifully structured slide presentation that could WIN a design competition. Create slides that tell a compelling story.\n\nCRITICAL FORMATTING RULES:\n- Do NOT use markdown formatting like **bold**, *italic*, __underline__, or \`code\`. Write plain text only.\n- Do NOT use asterisks, underscores, or backticks in any text.\n- All text should be clean, ready to display directly on a slide.\n\nFor each slide provide:\n- ## Slide Title (plain text, no bold/italic)\n- subtitle: A short subtitle\n- layout: (one of: title, content, two-column, quote, stats, big-statement)\n- Bullet points using - prefix (key insights, plain text)\n- Speaker Notes: detailed talking points\n\nDesign guidelines:\n- First slide should be a powerful title slide with a subtitle\n- Storytelling flow: hook > problem > solution > impact > call to action\n- Keep bullet points concise and impactful (max 4-5 per slide)\n- Include a closing slide\n- Make titles catchy and memorable\n- Vary layout types for visual interest: quote for powerful quotes, stats for data, big-statement for key takeaways, two-column for comparisons\n- Create 8-12 slides for a complete presentation\n- Write like a world-class copywriter: punchy, memorable, emotionally resonant\n\nBoard content:\n- ${boardData}${answersContext}${moodContext}\n\n${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format as clean markdown with ## for each slide. Remember: NO bold, NO italic, NO markdown formatting in content text.`,
-      document: `Convert this board content into a well-formatted ${docStyle} document. ${
+      slides: `Act as a Senior Graphic Designer and Presentation Expert. Convert this board content into a beautifully structured slide presentation.
+
+CRITICAL FORMATTING RULES:
+- Do NOT use markdown formatting: no **bold**, *italic*, __underline__, or \`code\`
+- Do NOT use asterisks, underscores, backticks, or square brackets
+- Write PLAIN TEXT ONLY — every word must be ready to display directly on a slide
+- No raw syntax of any kind
+
+SLIDE STRUCTURE — use ## for each slide:
+## Slide Title
+subtitle: A concise subtitle
+- Bullet point (max 18 words, punchy and memorable)
+- Another key insight
+Speaker Notes: detailed talking points
+
+SLIDE TYPES — vary these for visual interest:
+- Title slide (first): powerful hook with subtitle
+- Section dividers: single bold statement, 0-1 bullets  
+- Content slides: 3-5 concise bullets
+- Comparison: use "vs" or "compared" in title for side-by-side layout
+- Data slides: include numbers/percentages for stat-card layout
+- Quote slides: wrap in quotation marks for large-text treatment
+- Big statement (last): bold closing takeaway
+
+TEXT COMPRESSION RULES:
+- Max 5 bullets per slide (system will auto-split if more)
+- Max 18 words per bullet
+- Convert paragraphs into concise bullets
+- No filler words — every word must earn its place
+
+STORYTELLING FLOW: Hook > Context > Problem > Solution > Impact > Call to Action
+Create 8-12 slides total. Write like a world-class copywriter.
+
+Board content:
+- ${boardData}${answersContext}${moodContext}
+
+${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format as clean markdown with ## for each slide.`,
+      document: `Convert this board content into a well-formatted ${docStyle} document. Do NOT use raw markdown formatting in the output — text should be clean and readable. ${
         docStyle === "flowchart" ? "Include a text-based flowchart using arrows and boxes." :
-        docStyle === "report" ? "Structure with executive summary, sections, and conclusion." :
-        docStyle === "outline" ? "Create a hierarchical outline with clear nesting." :
-        "Write as a concise business memo."
-      }\n\nBoard content:\n- ${boardData}${answersContext}${moodContext}\n\n${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format as markdown.`,
+        docStyle === "report" ? "Structure with executive summary, sections with clear headings hierarchy, and conclusion." :
+        docStyle === "outline" ? "Create a hierarchical outline with clear nesting using heading levels." :
+        "Write as a concise business memo with clear sections."
+      }\n\nBoard content:\n- ${boardData}${answersContext}${moodContext}\n\n${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format with # for main headings, ## for subheadings, ### for sub-subheadings. Use - for bullet points.`,
       sheet: `Convert this board content into a structured table/spreadsheet format. Create columns for: Item, Category, Priority, Status, Notes, Connections.\n\nBoard content:\n- ${boardData}${answersContext}${moodContext}\n\n${customPrompt ? `Additional instructions: ${customPrompt}\n\n` : ""}Format as a markdown table.`,
     };
 
