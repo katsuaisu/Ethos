@@ -739,42 +739,15 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
             )}
           </div>
 
-          {/* Import from Scan */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <h4 className="text-serif text-sm text-foreground">Import from Scan</h4>
-              <button onClick={() => { setScanHistory(loadScanHistory()); setShowScanImport(!showScanImport); }} className="text-[10px] text-accent font-medium hover:underline">
-                {showScanImport ? "Hide" : `Show (${scanHistory.length})`}
+          {/* Convert — in left sidebar */}
+          {phase === "board" && items.length > 0 && (
+            <div className="pb-2 border-b border-border/20">
+              <button onClick={() => setShowConvert(true)} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 transition-colors">
+                <FileOutput className="w-3.5 h-3.5" />
+                Convert to Slides / Doc
               </button>
             </div>
-            <AnimatePresence>
-              {showScanImport && (
-                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
-                  {scanHistory.length === 0 ? (
-                    <p className="text-[11px] text-foreground/40 py-2">No scans yet. Go to Scan tab to analyze files.</p>
-                  ) : (
-                    <div className="space-y-1 max-h-[200px] overflow-y-auto scrollbar-thin">
-                      {scanHistory.slice(0, 10).map(entry => (
-                        <button
-                          key={entry.id}
-                          onClick={() => importScanEntry(entry)}
-                          className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors text-left"
-                        >
-                          <Upload className="w-3 h-3 text-accent shrink-0" />
-                          <div className="min-w-0 flex-1">
-                            <span className="text-xs font-medium text-foreground truncate block">
-                              {entry.result?.title || entry.result?.mood || entry.fileName || "Scan"}
-                            </span>
-                            <span className="text-[10px] text-foreground/40">{new Date(entry.date).toLocaleDateString()}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+          )}
 
           {/* Integration Selectors */}
           <div>
@@ -830,16 +803,6 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
               )}
             </div>
           </div>
-
-          {/* Convert — in left sidebar */}
-          {phase === "board" && items.length > 0 && (
-            <div className="pt-2 border-t border-border/20">
-              <button onClick={() => setShowConvert(true)} className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-accent/10 text-accent text-xs font-medium hover:bg-accent/15 transition-colors">
-                <FileOutput className="w-3.5 h-3.5" />
-                Convert to Slides / Doc
-              </button>
-            </div>
-          )}
         </div>
       </div>
 
@@ -1000,21 +963,6 @@ export default function InteractivePreview({ onPushToMiro, importedPalette, impo
                   className="w-full px-4 py-3 rounded-xl bg-primary text-primary-foreground text-sm font-medium flex items-center justify-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-40">
                   <Sparkles className="w-4 h-4" />Generate Board
                 </button>
-
-                {/* Import from Scan shortcut */}
-                {scanHistory.length > 0 && (
-                  <div className="mt-4">
-                    <h5 className="text-serif text-sm text-foreground/70 mb-2">Import from Scan</h5>
-                    <div className="space-y-1">
-                      {scanHistory.slice(0, 3).map(entry => (
-                        <button key={entry.id} onClick={() => importScanEntry(entry)} className="w-full flex items-center gap-2 px-3 py-2 rounded-lg bg-secondary/50 hover:bg-secondary transition-colors text-left text-xs">
-                          <Upload className="w-3 h-3 text-accent shrink-0" />
-                          <span className="text-foreground truncate">{entry.result?.title || entry.fileName || "Scan"}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {sessions.length > 0 && (
                   <div className="mt-6">
@@ -1388,8 +1336,8 @@ function InteractiveBoard({ items, layoutType, editingIdx, onEditIdx, onUpdateIt
             // Determine primary (central/branch) vs secondary
             const isPrimary = item.type === "central" || tgt.type === "central" || item.type === "branch" || tgt.type === "branch";
             connectors.push({
-              x1: item.x + srcW, y1: item.y + srcH,
-              x2: tgt.x + tgtW, y2: tgt.y + tgtH,
+              x1: tgt.x + tgtW, y1: tgt.y + tgtH,
+              x2: item.x + srcW, y2: item.y + srcH,
               idx: i, weight: isPrimary ? "primary" : "secondary",
             });
           }
