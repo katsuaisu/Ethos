@@ -183,7 +183,7 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
     }
   }, []);
 
-  // Fetch URL content
+  // Fetch URL content with type detection and validation
   const fetchUrl = async () => {
     if (!urlInput.trim()) return;
     setFetchingUrl(true);
@@ -202,6 +202,9 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
       const data = await res.json();
       if (data.error) throw new Error(data.error);
       
+      // Validate: backend now returns urlType and validated content
+      const urlType = data.urlType || "webpage";
+      
       // Build structured content string from extraction
       let structuredContent = "";
       if (data.structured?.sections && data.structured.sections.length > 0) {
@@ -212,6 +215,14 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
       } else {
         structuredContent = data.content || "";
       }
+
+      // Guard: if content is empty after extraction, warn user
+      if (!structuredContent || structuredContent.trim().length < 20) {
+        if (urlType === "youtube") {
+          throw new Error("Transcript unavailable for this video. Only title and metadata were extracted. Please upload the transcript manually if needed.");
+        }
+        throw new Error("Unable to extract meaningful content from this page. The page may be dynamic or require JavaScript.");
+      }
       
       setAttachedUrl({ 
         title: data.title || formattedUrl, 
@@ -220,7 +231,7 @@ export default function AIChatPanel({ onShareIdeas, onTransformToBoard }: AIChat
       });
       setShowUrlInput(false);
       setUrlInput("");
-      toast.success(`Fetched: ${data.title || formattedUrl}`);
+      toast.success(`Fetched: ${data.title || formattedUrl}${urlType === "youtube" ? " (YouTube)" : ""}`);
     } catch (e: any) {
       toast.error(e.message || "Unable to retrieve page content. Please check the link.");
     } finally {

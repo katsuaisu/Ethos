@@ -26,14 +26,14 @@ interface MiroItem {
   width?: number;
 }
 
-// Miro-friendly dimensions (Miro uses absolute positioning with these ranges)
+// Miro-friendly dimensions
 const MIRO_STICKY_WIDTH = 200;
 const MIRO_SHAPE_WIDTH = 250;
 const MIRO_SPACING_X = 320;
 const MIRO_SPACING_Y = 280;
 const MIRO_MAX_CONTENT_LEN = 200;
 
-// Map our element types to Miro primitives
+// Map our element types to Miro primitives — STRICT: no element may be dropped
 function mapElementType(elementType?: string, type?: string): "sticky_note" | "shape" {
   switch (elementType || type) {
     case "sticky_note":
@@ -50,11 +50,12 @@ function mapElementType(elementType?: string, type?: string): "sticky_note" | "s
     case "event":
       return "shape";
     default:
+      // FALLBACK: never silently drop — map unknown types to sticky_note
       return "sticky_note";
   }
 }
 
-// Miro color palette (named colors that Miro accepts)
+// Miro color palette
 const MIRO_COLORS: Record<string, string> = {
   "#FFF9DB": "light_yellow",
   "#D4EDDA": "light_green",
@@ -75,18 +76,14 @@ function toMiroColor(hex?: string): string {
   if (!hex || hex === "transparent") return "light_yellow";
   const upper = hex.toUpperCase();
   if (MIRO_COLORS[upper]) return MIRO_COLORS[upper];
-
-  // Heuristic: map by hue
   const r = parseInt(upper.slice(1, 3), 16);
   const g = parseInt(upper.slice(3, 5), 16);
   const b = parseInt(upper.slice(5, 7), 16);
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   const l = (max + min) / 2 / 255;
-
   if (l < 0.2) return "black";
   if (l > 0.9) return "gray";
-
   let h = 0;
   if (max !== min) {
     const d = max - min;
@@ -94,7 +91,6 @@ function toMiroColor(hex?: string): string {
     else if (max === g) h = ((b - r) / d + 2) * 60;
     else h = ((r - g) / d + 4) * 60;
   }
-
   if (h < 30 || h >= 330) return "light_pink";
   if (h < 60) return "orange";
   if (h < 90) return "light_yellow";
@@ -104,7 +100,6 @@ function toMiroColor(hex?: string): string {
   return "violet";
 }
 
-// Truncate content for Miro (HTML supported, keep it simple)
 function truncateContent(content: string): string {
   const clean = content
     .replace(/<[^>]*>/g, "")
@@ -112,9 +107,7 @@ function truncateContent(content: string): string {
     .replace(/\*(.+?)\*/g, "$1")
     .replace(/`(.+?)`/g, "$1")
     .trim();
-  return clean.length > MIRO_MAX_CONTENT_LEN
-    ? clean.slice(0, MIRO_MAX_CONTENT_LEN - 3) + "..."
-    : clean;
+  return clean.length > MIRO_MAX_CONTENT_LEN ? clean.slice(0, MIRO_MAX_CONTENT_LEN - 3) + "..." : clean;
 }
 
 // Detect and resolve spatial collisions
@@ -126,23 +119,16 @@ function resolveCollisions(items: MiroItem[]): MiroItem[] {
     const item = resolved[i];
     let { x, y } = item;
     let key = `${Math.round(x / 100)}_${Math.round(y / 100)}`;
-
-    // Nudge until no collision
     let attempts = 0;
     while (occupied.has(key) && attempts < 20) {
       x += MIRO_SPACING_X * 0.4;
-      if (attempts % 5 === 4) {
-        x = item.x;
-        y += MIRO_SPACING_Y * 0.5;
-      }
+      if (attempts % 5 === 4) { x = item.x; y += MIRO_SPACING_Y * 0.5; }
       key = `${Math.round(x / 100)}_${Math.round(y / 100)}`;
       attempts++;
     }
-
     occupied.add(key);
     resolved[i] = { ...item, x: Math.round(x), y: Math.round(y) };
   }
-
   return resolved;
 }
 
@@ -150,80 +136,103 @@ function resolveCollisions(items: MiroItem[]): MiroItem[] {
 function simplifyConnectors(items: LayoutItem[]): number[][] {
   const connections: number[][] = [];
   const connectionCount = new Map<number, number>();
+  const seen = new Set<number>();
 
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
     if (!item.connectedTo?.length) continue;
-
     for (const target of item.connectedTo) {
       if (target < 0 || target >= items.length || target === i) continue;
-
-      // Dedupe
       const key = Math.min(i, target) * 10000 + Math.max(i, target);
-      if (connections.some(c => Math.min(c[0], c[1]) * 10000 + Math.max(c[0], c[1]) === key)) continue;
-
-      // Limit connections per node to 3 for Miro clarity
+      if (seen.has(key)) continue;
       const countI = connectionCount.get(i) || 0;
       const countT = connectionCount.get(target) || 0;
       if (countI >= 3 || countT >= 3) continue;
-
+      seen.add(key);
       connections.push([i, target]);
       connectionCount.set(i, countI + 1);
       connectionCount.set(target, countT + 1);
     }
   }
-
   return connections;
 }
 
-// Re-layout items into a clean grid/tree for Miro
+// Re-layout items for Miro
 function normalizeLayout(items: LayoutItem[]): { x: number; y: number }[] {
   if (items.length === 0) return [];
-
-  // Check if mindmap-style (has a central node)
   const centralIdx = items.findIndex(i => i.type === "central");
-
   if (centralIdx >= 0) {
-    // Radial layout centered on Miro canvas
-    const cx = 0;
-    const cy = 0;
+    const cx = 0, cy = 0;
     const positions = items.map(() => ({ x: 0, y: 0 }));
     positions[centralIdx] = { x: cx, y: cy };
-
-    const branches = items
-      .map((_, i) => i)
-      .filter(i => i !== centralIdx);
-
+    const branches = items.map((_, i) => i).filter(i => i !== centralIdx);
     const angleStep = (2 * Math.PI) / Math.max(branches.length, 1);
     const radius = Math.max(500, branches.length * 100);
-
     branches.forEach((idx, i) => {
       const angle = angleStep * i - Math.PI / 2;
-      positions[idx] = {
-        x: Math.round(cx + Math.cos(angle) * radius),
-        y: Math.round(cy + Math.sin(angle) * radius),
-      };
+      positions[idx] = { x: Math.round(cx + Math.cos(angle) * radius), y: Math.round(cy + Math.sin(angle) * radius) };
     });
-
     return positions;
   }
-
-  // Grid layout
   const cols = Math.ceil(Math.sqrt(items.length));
-  return items.map((_, i) => ({
-    x: (i % cols) * MIRO_SPACING_X,
-    y: Math.floor(i / cols) * MIRO_SPACING_Y,
-  }));
+  return items.map((_, i) => ({ x: (i % cols) * MIRO_SPACING_X, y: Math.floor(i / cols) * MIRO_SPACING_Y }));
+}
+
+/**
+ * Snapshot and validate board state before export.
+ * Returns null if validation fails.
+ */
+export function snapshotAndValidate(items: LayoutItem[]): { items: LayoutItem[]; errors: string[] } | null {
+  if (!items || items.length === 0) return null;
+  
+  // Deep clone — freeze state
+  const snapshot = JSON.parse(JSON.stringify(items)) as LayoutItem[];
+  const errors: string[] = [];
+
+  // Validate every node
+  for (let i = 0; i < snapshot.length; i++) {
+    const item = snapshot[i];
+    if (item.x == null || item.y == null) {
+      errors.push(`Node ${i} missing position`);
+      item.x = item.x ?? 0;
+      item.y = item.y ?? 0;
+    }
+    if (!item.content) {
+      errors.push(`Node ${i} missing content`);
+      item.content = "(empty)";
+    }
+    // Validate connectors reference valid IDs
+    if (item.connectedTo) {
+      item.connectedTo = item.connectedTo.filter(c => {
+        if (c < 0 || c >= snapshot.length || c === i) {
+          errors.push(`Node ${i} has invalid connector to ${c}`);
+          return false;
+        }
+        return true;
+      });
+    }
+    // Ensure width/height
+    if (!item.width) item.width = 140;
+    if (!item.height) item.height = 100;
+  }
+
+  // Check for duplicate IDs (by content+position)
+  const seen = new Set<string>();
+  for (const item of snapshot) {
+    const key = `${item.content}|${item.x}|${item.y}`;
+    if (seen.has(key)) errors.push(`Duplicate element: "${item.content.slice(0, 30)}"`);
+    seen.add(key);
+  }
+
+  return { items: snapshot, errors };
 }
 
 /**
  * Convert internal board items to Miro-compatible format.
- * Handles: element mapping, layout normalization, connector simplification,
- * dimension normalization, and collision resolution.
+ * Uses snapshot for immutable export.
  */
 export function convertToMiroItems(items: LayoutItem[]): MiroItem[] {
   if (items.length === 0) return [];
-
   const positions = normalizeLayout(items);
 
   const miroItems: MiroItem[] = items.map((item, i) => ({
@@ -232,18 +241,14 @@ export function convertToMiroItems(items: LayoutItem[]): MiroItem[] {
     y: positions[i].y,
     type: mapElementType(item.elementType, item.type),
     color: toMiroColor(item.color),
-    width: item.type === "shape" || item.elementType === "shape_rect"
-      ? MIRO_SHAPE_WIDTH
-      : MIRO_STICKY_WIDTH,
+    width: item.type === "shape" || item.elementType === "shape_rect" ? MIRO_SHAPE_WIDTH : MIRO_STICKY_WIDTH,
   }));
 
   return resolveCollisions(miroItems);
 }
 
 /**
- * Get simplified connections (indices pairs) for Miro.
- * Miro doesn't support connector creation via REST API for sticky notes,
- * but we return them for future use or for connector API.
+ * Get simplified connections for Miro.
  */
 export function getMiroConnections(items: LayoutItem[]): number[][] {
   return simplifyConnectors(items);
