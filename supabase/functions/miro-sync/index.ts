@@ -8,26 +8,32 @@ const corsHeaders = {
 const MIRO_API = "https://api.miro.com/v2";
 
 // Map hex colors to Miro's named colors
-const COLOR_MAP: Record<string, string> = {
-  "#FFF9DB": "light_yellow",
-  "#D4EDDA": "light_green",
-  "#FDE8E8": "light_pink",
-  "#E3F2FD": "light_blue",
-  "#F3E5F5": "violet",
-  "#FFE8D6": "orange",
-  "#1A1A1A": "black",
-  "#E8825B": "orange",
-  "#F5F0EB": "gray",
-};
+// Valid Miro named colors for sticky notes
+const VALID_NAMED_COLORS = ["gray", "light_yellow", "yellow", "orange", "light_green", "green", "dark_green", "cyan", "light_pink", "pink", "violet", "red", "light_blue", "blue", "dark_blue", "black"];
 
-function toMiroColor(hex?: string): string {
-  if (!hex) return "light_yellow";
-  const upper = hex.toUpperCase();
-  if (COLOR_MAP[upper]) return COLOR_MAP[upper];
-  // Try to match closest
-  const validColors = ["gray", "light_yellow", "yellow", "orange", "light_green", "green", "dark_green", "cyan", "light_pink", "pink", "violet", "red", "light_blue", "blue", "dark_blue", "black"];
-  if (validColors.includes(hex)) return hex;
+// For sticky notes: must use named colors
+// For shapes: must use hex colors
+function toStickyColor(color?: string): string {
+  if (!color) return "light_yellow";
+  // Already a valid named color
+  if (VALID_NAMED_COLORS.includes(color)) return color;
+  // Not a named color — default
   return "light_yellow";
+}
+
+function toShapeColor(color?: string): string {
+  if (!color) return "#FFF9DB";
+  // If it's a hex color, use it directly
+  if (color.startsWith("#") && (color.length === 7 || color.length === 4)) return color;
+  // Named color → convert to hex for shapes
+  const namedToHex: Record<string, string> = {
+    light_yellow: "#FFF9DB", yellow: "#F5D128", orange: "#F24726",
+    light_green: "#D5F692", green: "#93D275", dark_green: "#1A7A3F",
+    cyan: "#6CD8CE", light_pink: "#F5B8C4", pink: "#F16C7F",
+    violet: "#B384BB", red: "#E6282B", light_blue: "#A6CCF5",
+    blue: "#2D9BF0", dark_blue: "#2850A8", black: "#1A1A2E", gray: "#E6E6E6",
+  };
+  return namedToHex[color] || "#FFF9DB";
 }
 
 serve(async (req) => {
@@ -118,22 +124,32 @@ serve(async (req) => {
     if (action === "push-items") {
       if (!boardId || !items?.length) throw new Error("boardId and items required");
       const results = [];
+      console.log(`Pushing ${items.length} items to board ${boardId}`);
       for (const item of items) {
-        const stickyBody: any = {
+        const isShape = item.type === "shape";
+        const bodyPayload: any = {
           data: { content: item.content || "" },
           position: { x: item.x || 0, y: item.y || 0 },
-          style: { fillColor: toMiroColor(item.color) },
         };
-        if (item.width) stickyBody.geometry = { width: item.width };
 
-        const endpoint = item.type === "shape"
+        if (isShape) {
+          bodyPayload.style = { fillColor: toShapeColor(item.color) };
+          bodyPayload.shape = "rectangle";
+          if (item.width) bodyPayload.geometry = { width: item.width, height: item.height || item.width };
+        } else {
+          bodyPayload.style = { fillColor: toStickyColor(item.color) };
+          if (item.width) bodyPayload.geometry = { width: item.width };
+        }
+
+        const endpoint = isShape
           ? `${MIRO_API}/boards/${boardId}/shapes`
           : `${MIRO_API}/boards/${boardId}/sticky_notes`;
 
+        console.log(`Creating ${isShape ? "shape" : "sticky"}: "${(item.content || "").slice(0, 30)}" color=${isShape ? toShapeColor(item.color) : toStickyColor(item.color)}`);
         const res = await fetch(endpoint, {
           method: "POST",
           headers,
-          body: JSON.stringify(stickyBody),
+          body: JSON.stringify(bodyPayload),
         });
         if (!res.ok) {
           const t = await res.text();
