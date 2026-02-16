@@ -7,25 +7,17 @@ const corsHeaders = {
 
 const MIRO_API = "https://api.miro.com/v2";
 
-// Map hex colors to Miro's named colors
-// Valid Miro named colors for sticky notes
 const VALID_NAMED_COLORS = ["gray", "light_yellow", "yellow", "orange", "light_green", "green", "dark_green", "cyan", "light_pink", "pink", "violet", "red", "light_blue", "blue", "dark_blue", "black"];
 
-// For sticky notes: must use named colors
-// For shapes: must use hex colors
 function toStickyColor(color?: string): string {
   if (!color) return "light_yellow";
-  // Already a valid named color
   if (VALID_NAMED_COLORS.includes(color)) return color;
-  // Not a named color — default
   return "light_yellow";
 }
 
 function toShapeColor(color?: string): string {
   if (!color) return "#FFF9DB";
-  // If it's a hex color, use it directly
   if (color.startsWith("#") && (color.length === 7 || color.length === 4)) return color;
-  // Named color → convert to hex for shapes
   const namedToHex: Record<string, string> = {
     light_yellow: "#FFF9DB", yellow: "#F5D128", orange: "#F24726",
     light_green: "#D5F692", green: "#93D275", dark_green: "#1A7A3F",
@@ -40,13 +32,12 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    // Support user-provided token via header, fall back to env
     const userToken = req.headers.get("x-miro-token");
     const MIRO_ACCESS_TOKEN = userToken || Deno.env.get("MIRO_ACCESS_TOKEN");
     if (!MIRO_ACCESS_TOKEN) throw new Error("MIRO_ACCESS_TOKEN is not configured");
 
     const body = await req.json();
-    const { action, boardId, items, code, redirectUri } = body;
+    const { action, boardId, items, connections, code, redirectUri } = body;
 
     // OAuth token exchange
     if (action === "oauth-exchange") {
@@ -83,7 +74,6 @@ serve(async (req) => {
       });
     }
 
-    // Get client ID for OAuth redirect
     if (action === "get-client-id") {
       const clientId = Deno.env.get("MIRO_CLIENT_ID");
       return new Response(JSON.stringify({ clientId }), {
@@ -123,9 +113,14 @@ serve(async (req) => {
 
     if (action === "push-items") {
       if (!boardId || !items?.length) throw new Error("boardId and items required");
-      const results = [];
+      const nodeResults = [];
+      const miroIdMap: Record<number, string> = {}; // index -> miro ID
+      
       console.log(`Pushing ${items.length} items to board ${boardId}`);
-      for (const item of items) {
+      
+      // Step 1: Create all nodes first
+      for (let idx = 0; idx < items.length; idx++) {
+        const item = items[idx];
         const isShape = item.type === "shape";
         const bodyPayload: any = {
           data: { content: item.content || "" },
@@ -145,7 +140,7 @@ serve(async (req) => {
           ? `${MIRO_API}/boards/${boardId}/shapes`
           : `${MIRO_API}/boards/${boardId}/sticky_notes`;
 
-        console.log(`Creating ${isShape ? "shape" : "sticky"}: "${(item.content || "").slice(0, 30)}" color=${isShape ? toShapeColor(item.color) : toStickyColor(item.color)}`);
+        console.log(`Creating ${isShape ? "shape" : "sticky"} [${idx}]: "${(item.content || "").slice(0, 30)}" color=${isShape ? toShapeColor(item.color) : toStickyColor(item.color)}`);
         const res = await fetch(endpoint, {
           method: "POST",
           headers,
@@ -154,12 +149,60 @@ serve(async (req) => {
         if (!res.ok) {
           const t = await res.text();
           console.error(`Miro push item failed [${res.status}]: ${t}`);
-          results.push({ error: t, item });
+          nodeResults.push({ error: t, item, index: idx });
         } else {
-          results.push(await res.json());
+          const created = await res.json();
+          miroIdMap[idx] = created.id;
+          nodeResults.push({ ...created, index: idx });
         }
       }
-      return new Response(JSON.stringify({ results }), {
+
+      // Step 2: Create connectors using the miroId map
+      const connectorResults = [];
+      if (connections && connections.length > 0) {
+        console.log(`Creating ${connections.length} connectors`);
+        for (const conn of connections) {
+          const [fromIdx, toIdx] = conn;
+          const startMiroId = miroIdMap[fromIdx];
+          const endMiroId = miroIdMap[toIdx];
+          
+          if (!startMiroId || !endMiroId) {
+            console.warn(`Skipping connector ${fromIdx}->${toIdx}: missing Miro ID (start=${startMiroId}, end=${endMiroId})`);
+            connectorResults.push({ error: `Missing node for connector ${fromIdx}->${toIdx}`, conn });
+            continue;
+          }
+
+          const connectorPayload = {
+            startItem: { id: startMiroId },
+            endItem: { id: endMiroId },
+            style: {
+              strokeColor: "#4262FF",
+              strokeWidth: "1.5",
+            },
+            shape: "curved",
+          };
+
+          console.log(`Creating connector: ${fromIdx}(${startMiroId}) -> ${toIdx}(${endMiroId})`);
+          const res = await fetch(`${MIRO_API}/boards/${boardId}/connectors`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(connectorPayload),
+          });
+          if (!res.ok) {
+            const t = await res.text();
+            console.error(`Miro connector failed [${res.status}]: ${t}`);
+            connectorResults.push({ error: t, conn });
+          } else {
+            connectorResults.push(await res.json());
+          }
+        }
+      }
+
+      return new Response(JSON.stringify({ 
+        results: nodeResults, 
+        connectorResults,
+        idMap: miroIdMap,
+      }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

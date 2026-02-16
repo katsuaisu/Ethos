@@ -24,6 +24,7 @@ interface MiroItem {
   type: "sticky_note" | "shape";
   color?: string;
   width?: number;
+  height?: number;
 }
 
 // Miro-friendly dimensions
@@ -132,31 +133,6 @@ function resolveCollisions(items: MiroItem[]): MiroItem[] {
   return resolved;
 }
 
-// Simplify connectors: reduce density, keep only primary relationships
-function simplifyConnectors(items: LayoutItem[]): number[][] {
-  const connections: number[][] = [];
-  const connectionCount = new Map<number, number>();
-  const seen = new Set<number>();
-
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    if (!item.connectedTo?.length) continue;
-    for (const target of item.connectedTo) {
-      if (target < 0 || target >= items.length || target === i) continue;
-      const key = Math.min(i, target) * 10000 + Math.max(i, target);
-      if (seen.has(key)) continue;
-      const countI = connectionCount.get(i) || 0;
-      const countT = connectionCount.get(target) || 0;
-      if (countI >= 3 || countT >= 3) continue;
-      seen.add(key);
-      connections.push([i, target]);
-      connectionCount.set(i, countI + 1);
-      connectionCount.set(target, countT + 1);
-    }
-  }
-  return connections;
-}
-
 // Re-layout items for Miro
 function normalizeLayout(items: LayoutItem[]): { x: number; y: number }[] {
   if (items.length === 0) return [];
@@ -242,14 +218,31 @@ export function convertToMiroItems(items: LayoutItem[]): MiroItem[] {
     type: mapElementType(item.elementType, item.type),
     color: toMiroColor(item.color),
     width: item.type === "shape" || item.elementType === "shape_rect" ? MIRO_SHAPE_WIDTH : MIRO_STICKY_WIDTH,
+    height: item.height || 100,
   }));
 
   return resolveCollisions(miroItems);
 }
 
 /**
- * Get simplified connections for Miro.
+ * Get simplified connections for Miro export.
+ * Returns array of [fromIndex, toIndex] pairs.
  */
 export function getMiroConnections(items: LayoutItem[]): number[][] {
-  return simplifyConnectors(items);
+  const connections: number[][] = [];
+  const seen = new Set<string>();
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    if (!item.connectedTo?.length) continue;
+    for (const target of item.connectedTo) {
+      if (target < 0 || target >= items.length || target === i) continue;
+      // Deduplicate bidirectional
+      const key = `${Math.min(i, target)}-${Math.max(i, target)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      connections.push([i, target]);
+    }
+  }
+  return connections;
 }

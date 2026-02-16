@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { RefreshCw, Loader2, ArrowDownLeft, CheckCircle2, AlertCircle, ArrowUpRight, Folder, Clock, LogIn, LogOut, ExternalLink } from "lucide-react";
-import { convertToMiroItems, snapshotAndValidate } from "@/lib/miroCompat";
+import { convertToMiroItems, snapshotAndValidate, getMiroConnections } from "@/lib/miroCompat";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 
@@ -279,29 +279,41 @@ export async function pushItemsToMiro(boardId: string, items: any[]): Promise<{ 
 
   // Step 2: Convert using compatibility layer
   const miroItems = convertToMiroItems(snapshot.items);
+  
+  // Step 3: Get connections for connector export
+  const connections = getMiroConnections(snapshot.items);
 
-  // Step 3: Push — nodes only (Miro REST API doesn't support connectors for sticky notes)
+  // Step 4: Push nodes AND connectors
   const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/miro-sync`, {
     method: "POST",
     headers,
-    body: JSON.stringify({ action: "push-items", boardId, items: miroItems }),
+    body: JSON.stringify({ action: "push-items", boardId, items: miroItems, connections }),
   });
   const data = await res.json();
 
-  // Step 4: Verify counts
+  // Step 5: Verify counts
   const results = data.results || [];
+  const connectorResults = data.connectorResults || [];
   const successCount = results.filter((r: any) => !r.error).length;
   const failedCount = results.filter((r: any) => r.error).length;
-  const errors = results.filter((r: any) => r.error).map((r: any) => r.error as string);
+  const connectorSuccess = connectorResults.filter((r: any) => !r.error).length;
+  const connectorFailed = connectorResults.filter((r: any) => r.error).length;
+  const errors = [
+    ...results.filter((r: any) => r.error).map((r: any) => r.error as string),
+    ...connectorResults.filter((r: any) => r.error).map((r: any) => r.error as string),
+  ];
 
-  if (failedCount > 0) {
-    toast.warning(`Miro export: ${successCount}/${miroItems.length} items created. ${failedCount} failed.`);
+  const totalExpected = miroItems.length + connections.length;
+  const totalCreated = successCount + connectorSuccess;
+
+  if (failedCount > 0 || connectorFailed > 0) {
+    toast.warning(`Miro export: ${successCount}/${miroItems.length} nodes, ${connectorSuccess}/${connections.length} connectors.`);
   }
 
   return {
-    success: failedCount === 0,
-    created: successCount,
-    expected: miroItems.length,
+    success: failedCount === 0 && connectorFailed === 0,
+    created: totalCreated,
+    expected: totalExpected,
     errors,
   };
 }
