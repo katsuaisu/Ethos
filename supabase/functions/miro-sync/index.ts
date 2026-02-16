@@ -118,29 +118,20 @@ serve(async (req) => {
       
       console.log(`Pushing ${items.length} items to board ${boardId}`);
       
-      // Step 1: Create all nodes first
+      // Step 1: Create all nodes as sticky notes
       for (let idx = 0; idx < items.length; idx++) {
         const item = items[idx];
-        const isShape = item.type === "shape";
+        const stickyColor = toStickyColor(item.color);
         const bodyPayload: any = {
           data: { content: item.content || "" },
           position: { x: item.x || 0, y: item.y || 0 },
+          style: { fillColor: stickyColor },
         };
+        if (item.width) bodyPayload.geometry = { width: item.width };
 
-        if (isShape) {
-          bodyPayload.style = { fillColor: toShapeColor(item.color) };
-          bodyPayload.shape = "rectangle";
-          if (item.width) bodyPayload.geometry = { width: item.width, height: item.height || item.width };
-        } else {
-          bodyPayload.style = { fillColor: toStickyColor(item.color) };
-          if (item.width) bodyPayload.geometry = { width: item.width };
-        }
+        const endpoint = `${MIRO_API}/boards/${boardId}/sticky_notes`;
 
-        const endpoint = isShape
-          ? `${MIRO_API}/boards/${boardId}/shapes`
-          : `${MIRO_API}/boards/${boardId}/sticky_notes`;
-
-        console.log(`Creating ${isShape ? "shape" : "sticky"} [${idx}]: "${(item.content || "").slice(0, 30)}" color=${isShape ? toShapeColor(item.color) : toStickyColor(item.color)}`);
+        console.log(`Creating sticky [${idx}]: "${(item.content || "").slice(0, 30)}" color=${stickyColor}`);
         const res = await fetch(endpoint, {
           method: "POST",
           headers,
